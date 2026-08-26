@@ -4,6 +4,7 @@
  */
 
 import { CameraManager } from './core/cameraManager.js';
+import { PoseEngine } from './core/poseEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -18,6 +19,28 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const cameraManager = new CameraManager();
+
+  /** @type {number|null} */
+  let frameRequestIdx = null;
+  /** @type {boolean} */
+  let isTrackingActive = false;
+  /** @type {string|null} */
+  let trackingState = null;
+
+  // Initialize PoseEngine with a callback to display tracking states
+  const poseEngine = new PoseEngine((results) => {
+    const hasPose = !!(results && results.poseLandmarks && results.poseLandmarks.length > 0);
+    const newState = hasPose ? 'detected' : 'searching';
+
+    if (newState !== trackingState) {
+      trackingState = newState;
+      if (hasPose) {
+        writeLog('Pose Tracking: Full Body Detected (33 Landmarks)');
+      } else {
+        writeLog('Searching for body...');
+      }
+    }
+  });
 
   /**
    * Appends messages to the console container.
@@ -39,6 +62,55 @@ document.addEventListener('DOMContentLoaded', () => {
     
     logContainer.appendChild(line);
     logContainer.scrollTop = logContainer.scrollHeight;
+  };
+
+  /**
+   * Continuous processing loop dispatching frames to PoseEngine.
+   */
+  const processFrameLoop = async () => {
+    if (!isTrackingActive) {
+      return;
+    }
+
+    if (webcam.readyState >= webcam.HAVE_CURRENT_DATA && !webcam.paused && !webcam.ended) {
+      try {
+        await poseEngine.sendFrame(webcam);
+      } catch (error) {
+        console.error('PoseEngine: Frame processing failed in animation loop:', error);
+      }
+    }
+
+    frameRequestIdx = requestAnimationFrame(processFrameLoop);
+  };
+
+  /**
+   * Starts coordinates detection.
+   */
+  const startTracking = async () => {
+    writeLog('Initializing Pose Landmark Engine...');
+    await poseEngine.init();
+    
+    isTrackingActive = true;
+    trackingState = null; // force status log update
+    poseEngine.resetSmoothing();
+    
+    if (frameRequestIdx) {
+      cancelAnimationFrame(frameRequestIdx);
+    }
+    frameRequestIdx = requestAnimationFrame(processFrameLoop);
+  };
+
+  /**
+   * Halts detection pipeline.
+   */
+  const stopTracking = () => {
+    isTrackingActive = false;
+    if (frameRequestIdx) {
+      cancelAnimationFrame(frameRequestIdx);
+      frameRequestIdx = null;
+    }
+    poseEngine.resetSmoothing();
+    trackingState = null;
   };
 
   /**
@@ -64,6 +136,8 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         writeLog('Camera active, but no video track found.', true);
       }
+      
+      await startTracking();
       updateUIState(true);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -78,6 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
     switchBtn.disabled = true;
 
     try {
+      poseEngine.resetSmoothing(); // clear smoothing history on device swap
       const stream = await cameraManager.toggleCamera();
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
@@ -95,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   stopBtn.addEventListener('click', () => {
     writeLog('Releasing video streams...');
+    stopTracking();
     cameraManager.stopStream();
     writeLog('Stream terminated.');
     updateUIState(false);
