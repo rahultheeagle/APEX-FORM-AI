@@ -1,10 +1,7 @@
-/**
- * @fileoverview Layer 1: App Glue.
- * Binds UI control panel events to Layer 5 CameraManager commands.
- */
-
 import { CameraManager } from './core/cameraManager.js';
 import { PoseEngine } from './core/poseEngine.js';
+import { EXERCISE_RULES } from './config/exerciseRules.js';
+import { calculate3DAngle, calculateIncline, getConfidenceScore } from './core/mathEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -12,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const switchBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('switch-btn'));
   const stopBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('stop-btn'));
   const logContainer = /** @type {HTMLElement|null} */ (document.getElementById('log'));
+  const exerciseSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('exercise-select'));
 
   if (!webcam || !startBtn || !switchBtn || !stopBtn || !logContainer) {
     console.error('ApexForm AI: Failed to initialize application glue due to missing DOM nodes.');
@@ -26,8 +24,125 @@ document.addEventListener('DOMContentLoaded', () => {
   let isTrackingActive = false;
   /** @type {string|null} */
   let trackingState = null;
+  
+  /** @type {string} */
+  let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
+  
+  /** @type {number} */
+  let lastTelemetryTime = 0;
+  
+  /** @type {number} */
+  const TELEMETRY_THROTTLE_MS = 500;
 
-  // Initialize PoseEngine with a callback to display tracking states
+  if (exerciseSelect) {
+    exerciseSelect.addEventListener('change', () => {
+      activeExercise = exerciseSelect.value;
+      writeLog(`Exercise rules switched to: ${activeExercise}`);
+      poseEngine.resetSmoothing();
+    });
+  }
+
+  /**
+   * Evaluates biomechanical angles and writes the outputs to the console log window.
+   * @param {Array<any>} landmarks The current array of smoothed landmarks.
+   */
+  const processTelemetry = (landmarks) => {
+    if (activeExercise === 'SQUAT') {
+      const joints = EXERCISE_RULES.SQUAT.joints;
+      const thresholds = EXERCISE_RULES.SQUAT.thresholds;
+
+      // Extract Left Squat Landmarks
+      const hipL = landmarks[joints.hipLeft];
+      const kneeL = landmarks[joints.kneeLeft];
+      const ankleL = landmarks[joints.ankleLeft];
+      const shoulderL = landmarks[joints.shoulderLeft];
+
+      // Extract Right Squat Landmarks
+      const hipR = landmarks[joints.hipRight];
+      const kneeR = landmarks[joints.kneeRight];
+      const ankleR = landmarks[joints.ankleRight];
+      const shoulderR = landmarks[joints.shoulderRight];
+
+      const confidenceL = getConfidenceScore(hipL, kneeL, ankleL, shoulderL);
+      const confidenceR = getConfidenceScore(hipR, kneeR, ankleR, shoulderR);
+
+      // Perform calculations using the side with better detection confidence
+      const isLeft = confidenceL >= confidenceR;
+      const confidence = isLeft ? confidenceL : confidenceR;
+
+      if (confidence < 0.55) {
+        writeLog('Telemetry: Low tracking confidence. Make sure your body is in view.');
+        return;
+      }
+
+      const selectedHip = isLeft ? hipL : hipR;
+      const selectedKnee = isLeft ? kneeL : kneeR;
+      const selectedAnkle = isLeft ? ankleL : ankleR;
+      const selectedShoulder = isLeft ? shoulderL : shoulderR;
+
+      const kneeAngle = calculate3DAngle(selectedHip, selectedKnee, selectedAnkle);
+      const torsoIncline = calculateIncline(selectedShoulder, selectedHip);
+
+      let posture = 'Transitioning';
+      if (kneeAngle >= thresholds.standingMin) {
+        posture = 'Standing';
+      } else if (kneeAngle <= thresholds.depthMax) {
+        posture = 'Deep Squat';
+      }
+
+      let inclineWarning = '';
+      if (torsoIncline > thresholds.maxTorsoIncline) {
+        inclineWarning = ' [WARNING: Excessive Incline]';
+      }
+
+      const sideStr = isLeft ? 'Left' : 'Right';
+      writeLog(`Squat Knee Angle (${sideStr}): ${Math.round(kneeAngle)}° (${posture}) | Torso Incline: ${Math.round(torsoIncline)}°${inclineWarning}`);
+
+    } else if (activeExercise === 'BICEP_CURL') {
+      const joints = EXERCISE_RULES.BICEP_CURL.joints;
+      const thresholds = EXERCISE_RULES.BICEP_CURL.thresholds;
+
+      // Left arm landmarks
+      const shoulderL = landmarks[joints.shoulderLeft];
+      const elbowL = landmarks[joints.elbowLeft];
+      const wristL = landmarks[joints.wristLeft];
+
+      // Right arm landmarks
+      const shoulderR = landmarks[joints.shoulderRight];
+      const elbowR = landmarks[joints.elbowRight];
+      const wristR = landmarks[joints.wristRight];
+
+      const confidenceL = getConfidenceScore(shoulderL, elbowL, wristL);
+      const confidenceR = getConfidenceScore(shoulderR, elbowR, wristR);
+
+      // Analyze side with higher tracking visibility
+      const isLeft = confidenceL >= confidenceR;
+      const confidence = isLeft ? confidenceL : confidenceR;
+
+      if (confidence < 0.55) {
+        writeLog('Telemetry: Low tracking confidence. Make sure your arm is in view.');
+        return;
+      }
+
+      const selectedShoulder = isLeft ? shoulderL : shoulderR;
+      const selectedElbow = isLeft ? elbowL : elbowR;
+      const selectedWrist = isLeft ? wristL : wristR;
+
+      const elbowAngle = calculate3DAngle(selectedShoulder, selectedElbow, selectedWrist);
+
+      let posture = 'Transitioning';
+      if (elbowAngle >= thresholds.extensionMin) {
+        posture = 'Extension';
+      } else if (elbowAngle <= thresholds.contractionMax) {
+        posture = 'Contraction';
+      }
+
+      const sideStr = isLeft ? 'Left' : 'Right';
+      writeLog(`Biceps Elbow Angle (${sideStr}): ${Math.round(elbowAngle)}° (${posture})`);
+    }
+  };
+
+  // Initialize PoseEngine with a callback to calculate and display telemetry
   const poseEngine = new PoseEngine((results) => {
     const hasPose = !!(results && results.poseLandmarks && results.poseLandmarks.length > 0);
     const newState = hasPose ? 'detected' : 'searching';
@@ -38,6 +153,14 @@ document.addEventListener('DOMContentLoaded', () => {
         writeLog('Pose Tracking: Full Body Detected (33 Landmarks)');
       } else {
         writeLog('Searching for body...');
+      }
+    }
+
+    if (hasPose) {
+      const now = Date.now();
+      if (now - lastTelemetryTime >= TELEMETRY_THROTTLE_MS) {
+        lastTelemetryTime = now;
+        processTelemetry(results.poseLandmarks);
       }
     }
   });
