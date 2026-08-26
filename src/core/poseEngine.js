@@ -4,14 +4,6 @@
  */
 
 /**
- * Smoothing factor for Exponential Moving Average (EMA) filter.
- * Lower value means more smoothing but introduces more temporal lag.
- * Value must be between 0 (exclusive) and 1 (inclusive).
- * @type {number}
- */
-const EMA_ALPHA = 0.35;
-
-/**
  * JSDoc definitions for MediaPipe results structure.
  * @typedef {Object} NormalizedLandmark
  * @property {number} x X coordinate normalized to [0, 1].
@@ -34,8 +26,9 @@ const EMA_ALPHA = 0.35;
 export class PoseEngine {
   /**
    * @param {function(PoseResults): void} onPoseDetected Callback function invoked on successful landmark extraction.
+   * @param {number} [alpha=0.6] Smoothing factor for Exponential Moving Average (EMA) [0.0 - 1.0]. Lower values mean more smoothing but add temporal lag.
    */
-  constructor(onPoseDetected) {
+  constructor(onPoseDetected, alpha = 0.6) {
     if (typeof onPoseDetected !== 'function') {
       throw new TypeError('PoseEngine: Constructor requires a valid callback function.');
     }
@@ -46,6 +39,13 @@ export class PoseEngine {
      * @private
      */
     this.onPoseDetected = onPoseDetected;
+
+    /**
+     * Smoothing factor for Exponential Moving Average (EMA) filter.
+     * @type {number}
+     * @public
+     */
+    this.alpha = alpha;
 
     /**
      * Native MediaPipe Pose instance.
@@ -131,29 +131,29 @@ export class PoseEngine {
   /**
    * Applies Exponential Moving Average (EMA) smoothing to reduce high-frequency jitter.
    * 
-   * @param {Array<NormalizedLandmark>} currentLandmarks Raw coordinates from the engine.
+   * @param {Array<NormalizedLandmark>} rawLandmarks Raw coordinates from the engine.
    * @returns {Array<NormalizedLandmark>} Filtered coordinate array.
    * @private
    */
-  applyEMASmoothing(currentLandmarks) {
-    if (!currentLandmarks) {
+  _applySmoothing(rawLandmarks) {
+    if (!rawLandmarks) {
       this.smoothedLandmarks = null;
       return [];
     }
 
     // If no previous values or size changes, initialize the smoother with raw values.
-    if (!this.smoothedLandmarks || this.smoothedLandmarks.length !== currentLandmarks.length) {
-      this.smoothedLandmarks = currentLandmarks.map((l) => ({ ...l }));
+    if (!this.smoothedLandmarks || this.smoothedLandmarks.length !== rawLandmarks.length) {
+      this.smoothedLandmarks = rawLandmarks.map((l) => ({ ...l }));
       return this.smoothedLandmarks;
     }
 
     // Apply S_t = alpha * Y_t + (1 - alpha) * S_{t-1} to each coordinate dimension
-    const alpha = EMA_ALPHA;
+    const alpha = this.alpha;
     const beta = 1.0 - alpha;
 
     const smoothed = [];
-    for (let i = 0; i < currentLandmarks.length; i++) {
-      const cur = currentLandmarks[i];
+    for (let i = 0; i < rawLandmarks.length; i++) {
+      const cur = rawLandmarks[i];
       const prev = this.smoothedLandmarks[i];
 
       smoothed.push({
@@ -182,7 +182,7 @@ export class PoseEngine {
 
     if (results.poseLandmarks) {
       // Smooth the normalized coordinates to reduce tracking jitter.
-      processedResults.poseLandmarks = this.applyEMASmoothing(results.poseLandmarks);
+      processedResults.poseLandmarks = this._applySmoothing(results.poseLandmarks);
       
       // Keep native metric space world coordinates if available.
       if (results.poseWorldLandmarks) {
