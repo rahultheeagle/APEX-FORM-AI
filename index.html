@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ApexForm AI - Gym Form Analyzer</title>
+  <meta name="theme-color" content="#121212">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="./css/variables.css">
+  <link rel="stylesheet" href="./css/main.css">
+</head>
+<body>
+  <header class="header">
+    <h1 class="header__title">ApexForm AI</h1>
+  </header>
+  
+  <main class="main-content">
+    <section class="media-frame">
+      <video id="webcam" class="media-frame__video" playsinline autoplay muted></video>
+    </section>
+    
+    <nav class="control-panel">
+      <button id="start-btn" class="btn btn--primary">Start Stream</button>
+      <button id="switch-btn" class="btn btn--primary" disabled>Switch Camera</button>
+      <button id="stop-btn" class="btn btn--danger" disabled>Stop Stream</button>
+    </nav>
+    
+    <section class="log-panel">
+      <h2 class="log-panel__title">Console Log</h2>
+      <div id="log" class="log-panel__console">Ready to initialize stream...</div>
+    </section>
+  </main>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

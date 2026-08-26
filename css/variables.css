@@ -1,0 +1,28 @@
+:root {
+  /* Color Tokens */
+  --color-bg: #121212;
+  --color-surface: #1e1e1e;
+  --color-surface-border: #333333;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #aaaaaa;
+
+  /* Accent Colors */
+  --color-accent-primary: #00ff66;
+  --color-accent-primary-hover: #00dd55;
+  --color-accent-danger: #ff3333;
+
+  /* Media Video */
+  --color-media-bg: #222222;
+
+  /* Spacing Tokens */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+
+  /* Border Radius Tokens */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+}
