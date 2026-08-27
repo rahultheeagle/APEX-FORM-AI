@@ -1,7 +1,7 @@
 /**
  * @fileoverview Layer 1: App Glue.
  * Binds UI control panel events, Layer 5 CameraManager, Layer 4 PoseEngine, 
- * Layer 3 MathEngine, and Layer 2 StateMachine + SoundEngine together.
+ * Layer 3 MathEngine, Layer 2 StateMachine + SoundEngine, and Layer 1 HUDRenderer.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -10,16 +10,18 @@ import { EXERCISE_RULES } from './config/exerciseRules.js';
 import { calculate3DAngle, calculateIncline, getConfidenceScore } from './core/mathEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
+import { HUDRenderer } from './ui/hudRenderer.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
+  const canvas = /** @type {HTMLCanvasElement|null} */ (document.getElementById('output-canvas'));
   const startBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('start-btn'));
   const switchBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('switch-btn'));
   const stopBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('stop-btn'));
   const logContainer = /** @type {HTMLElement|null} */ (document.getElementById('log'));
   const exerciseSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('exercise-select'));
 
-  if (!webcam || !startBtn || !switchBtn || !stopBtn || !logContainer) {
+  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer) {
     console.error('ApexForm AI: Failed to initialize application glue due to missing DOM nodes.');
     return;
   }
@@ -27,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const cameraManager = new CameraManager();
   const stateMachine = new StateMachine();
   const soundEngine = new SoundEngine();
+  const hudRenderer = new HUDRenderer(canvas);
 
   /** @type {number|null} */
   let frameRequestIdx = null;
@@ -42,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
   /** @type {number} */
   const TELEMETRY_THROTTLE_MS = 500;
 
-  // Trackers to detect transitions
+  // Trackers to detect state changes and trigger sound cues
   let lastRepCount = 0;
   let lastState = 'IDLE';
 
@@ -51,11 +54,14 @@ document.addEventListener('DOMContentLoaded', () => {
       activeExercise = exerciseSelect.value;
       writeLog(`Exercise rules switched to: ${activeExercise}`);
       
-      // Reset state machine on switch
+      // Reset state machine parameters
       stateMachine.reset();
       lastRepCount = 0;
       lastState = 'IDLE';
       poseEngine.resetSmoothing();
+      
+      // Clear visual frame overlay
+      hudRenderer.clear();
     });
   }
 
@@ -81,118 +87,10 @@ document.addEventListener('DOMContentLoaded', () => {
     logContainer.scrollTop = logContainer.scrollHeight;
   };
 
-  /**
-   * Evaluates biomechanical angles and feeds them to the FSM.
-   * @param {Array<any>} landmarks Smoothed keypoint landmarks.
-   */
-  const processTelemetry = (landmarks) => {
-    if (activeExercise === 'SQUAT') {
-      const joints = EXERCISE_RULES.SQUAT.joints;
-      const thresholds = EXERCISE_RULES.SQUAT.thresholds;
-
-      const hipL = landmarks[joints.hipLeft];
-      const kneeL = landmarks[joints.kneeLeft];
-      const ankleL = landmarks[joints.ankleLeft];
-      const shoulderL = landmarks[joints.shoulderLeft];
-
-      const hipR = landmarks[joints.hipRight];
-      const kneeR = landmarks[joints.kneeRight];
-      const ankleR = landmarks[joints.ankleRight];
-      const shoulderR = landmarks[joints.shoulderRight];
-
-      const confidenceL = getConfidenceScore(hipL, kneeL, ankleL, shoulderL);
-      const confidenceR = getConfidenceScore(hipR, kneeR, ankleR, shoulderR);
-
-      const isLeft = confidenceL >= confidenceR;
-      const confidence = isLeft ? confidenceL : confidenceR;
-
-      if (confidence < 0.55) {
-        writeLog('Telemetry: Low tracking confidence. Please adjust your body position.');
-        return;
-      }
-
-      const selectedHip = isLeft ? hipL : hipR;
-      const selectedKnee = isLeft ? kneeL : kneeR;
-      const selectedAnkle = isLeft ? ankleL : ankleR;
-      const selectedShoulder = isLeft ? shoulderL : shoulderR;
-
-      const kneeAngle = calculate3DAngle(selectedHip, selectedKnee, selectedAnkle);
-      const torsoIncline = calculateIncline(selectedShoulder, selectedHip);
-
-      // FSM state transition evaluation
-      const fsm = stateMachine.update('SQUAT', kneeAngle, torsoIncline);
-
-      // Audio feedback triggers
-      if (fsm.repCount > lastRepCount) {
-        soundEngine.playSuccessChime();
-        lastRepCount = fsm.repCount;
-      }
-      if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
-        soundEngine.playFaultTone();
-      }
-      lastState = fsm.currentState;
-
-      // Telemetry log output formatting
-      const displayAngle = Math.round(kneeAngle);
-      let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
-      if (fsm.hasFault) {
-        logLine += ` [FAULT: ${fsm.faultMessage}]`;
-      }
-      writeLog(logLine);
-
-    } else if (activeExercise === 'BICEP_CURL') {
-      const joints = EXERCISE_RULES.BICEP_CURL.joints;
-
-      const shoulderL = landmarks[joints.shoulderLeft];
-      const elbowL = landmarks[joints.elbowLeft];
-      const wristL = landmarks[joints.wristLeft];
-
-      const shoulderR = landmarks[joints.shoulderRight];
-      const elbowR = landmarks[joints.elbowRight];
-      const wristR = landmarks[joints.wristRight];
-
-      const confidenceL = getConfidenceScore(shoulderL, elbowL, wristL);
-      const confidenceR = getConfidenceScore(shoulderR, elbowR, wristR);
-
-      const isLeft = confidenceL >= confidenceR;
-      const confidence = isLeft ? confidenceL : confidenceR;
-
-      if (confidence < 0.55) {
-        writeLog('Telemetry: Low tracking confidence. Make sure your arm is visible.');
-        return;
-      }
-
-      const selectedShoulder = isLeft ? shoulderL : shoulderR;
-      const selectedElbow = isLeft ? elbowL : elbowR;
-      const selectedWrist = isLeft ? wristL : wristR;
-
-      const elbowAngle = calculate3DAngle(selectedShoulder, selectedElbow, selectedWrist);
-
-      // FSM state transition evaluation
-      const fsm = stateMachine.update('BICEP_CURL', elbowAngle);
-
-      // Audio feedback triggers
-      if (fsm.repCount > lastRepCount) {
-        soundEngine.playSuccessChime();
-        lastRepCount = fsm.repCount;
-      }
-      if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
-        soundEngine.playFaultTone();
-      }
-      lastState = fsm.currentState;
-
-      const displayAngle = Math.round(elbowAngle);
-      let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
-      if (fsm.hasFault) {
-        logLine += ` [FAULT: ${fsm.faultMessage}]`;
-      }
-      writeLog(logLine);
-    }
-  };
-
-  // Initialize PoseEngine with a callback to calculate and feed FSM
+  // Initialize PoseEngine with a callback to calculate biomechanics and update UI/Audio
   const poseEngine = new PoseEngine((results) => {
-    const hasPose = !!(results && results.poseLandmarks && results.poseLandmarks.length > 0);
+    const landmarks = results.poseLandmarks;
+    const hasPose = !!(landmarks && landmarks.length > 0);
     const newState = hasPose ? 'detected' : 'searching';
 
     if (newState !== trackingState) {
@@ -204,21 +102,124 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    let currentAngle = 0;
+    let torsoIncline = 0;
+    let fsm = { currentState: 'IDLE', repCount: 0, hasFault: false, faultMessage: '' };
+
     if (hasPose) {
+      // 1. Calculate Joint Angles
+      if (activeExercise === 'SQUAT') {
+        const joints = EXERCISE_RULES.SQUAT.joints;
+
+        const hipL = landmarks[joints.hipLeft];
+        const kneeL = landmarks[joints.kneeLeft];
+        const ankleL = landmarks[joints.ankleLeft];
+        const shoulderL = landmarks[joints.shoulderLeft];
+
+        const hipR = landmarks[joints.hipRight];
+        const kneeR = landmarks[joints.kneeRight];
+        const ankleR = landmarks[joints.ankleRight];
+        const shoulderR = landmarks[joints.shoulderRight];
+
+        const confidenceL = getConfidenceScore(hipL, kneeL, ankleL, shoulderL);
+        const confidenceR = getConfidenceScore(hipR, kneeR, ankleR, shoulderR);
+
+        const isLeft = confidenceL >= confidenceR;
+        const confidence = isLeft ? confidenceL : confidenceR;
+
+        if (confidence >= 0.55) {
+          const selectedHip = isLeft ? hipL : hipR;
+          const selectedKnee = isLeft ? kneeL : kneeR;
+          const selectedAnkle = isLeft ? ankleL : ankleR;
+          const selectedShoulder = isLeft ? shoulderL : shoulderR;
+
+          currentAngle = calculate3DAngle(selectedHip, selectedKnee, selectedAnkle);
+          torsoIncline = calculateIncline(selectedShoulder, selectedHip);
+        }
+      } else if (activeExercise === 'BICEP_CURL') {
+        const joints = EXERCISE_RULES.BICEP_CURL.joints;
+
+        const shoulderL = landmarks[joints.shoulderLeft];
+        const elbowL = landmarks[joints.elbowLeft];
+        const wristL = landmarks[joints.wristLeft];
+
+        const shoulderR = landmarks[joints.shoulderRight];
+        const elbowR = landmarks[joints.elbowRight];
+        const wristR = landmarks[joints.wristRight];
+
+        const confidenceL = getConfidenceScore(shoulderL, elbowL, wristL);
+        const confidenceR = getConfidenceScore(shoulderR, elbowR, wristR);
+
+        const isLeft = confidenceL >= confidenceR;
+        const confidence = isLeft ? confidenceL : confidenceR;
+
+        if (confidence >= 0.55) {
+          const selectedShoulder = isLeft ? shoulderL : shoulderR;
+          const selectedElbow = isLeft ? elbowL : elbowR;
+          const selectedWrist = isLeft ? wristL : wristR;
+
+          currentAngle = calculate3DAngle(selectedShoulder, selectedElbow, selectedWrist);
+        }
+      }
+
+      // 2. FSM state transition updates at 60fps for real-time validation and audio feedback
+      fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
+
+      // 3. Audio triggers on state transitions
+      if (fsm.repCount > lastRepCount) {
+        soundEngine.playSuccessChime();
+        lastRepCount = fsm.repCount;
+      }
+      if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
+        soundEngine.playFaultTone();
+      }
+      lastState = fsm.currentState;
+
+      // 4. Log text updates throttled to avoid layout thrashing
       const now = Date.now();
       if (now - lastTelemetryTime >= TELEMETRY_THROTTLE_MS) {
         lastTelemetryTime = now;
-        processTelemetry(results.poseLandmarks);
+        const displayAngle = Math.round(currentAngle);
+        let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
+        if (fsm.hasFault) {
+          logLine += ` [FAULT: ${fsm.faultMessage}]`;
+        }
+        writeLog(logLine);
       }
+    } else {
+      // Retain previous FSM state values if body tracking is lost
+      fsm = {
+        currentState: stateMachine.currentState,
+        repCount: stateMachine.repCount,
+        hasFault: stateMachine.hasFault,
+        faultMessage: stateMachine.faultMessage
+      };
     }
+
+    // 5. Render Neon overlay and HUD visual elements at 60fps
+    hudRenderer.render({
+      landmarks: hasPose ? landmarks : [],
+      activeAngle: currentAngle,
+      activeExercise,
+      currentState: fsm.currentState,
+      repCount: fsm.repCount,
+      hasFault: fsm.hasFault,
+      faultMessage: fsm.faultMessage
+    });
   });
 
   /**
-   * Continuous processing loop dispatching frames to PoseEngine.
+   * Continuous loop dispatching video frames to MediaPipe Pose engine.
    */
   const processFrameLoop = async () => {
     if (!isTrackingActive) {
       return;
+    }
+
+    // Ensure the canvas width/height matches the video element output size dynamically
+    if (webcam.videoWidth > 0 && (canvas.width !== webcam.videoWidth || canvas.height !== webcam.videoHeight)) {
+      canvas.width = webcam.videoWidth;
+      canvas.height = webcam.videoHeight;
     }
 
     if (webcam.readyState >= webcam.HAVE_CURRENT_DATA && !webcam.paused && !webcam.ended) {
@@ -265,6 +266,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     poseEngine.resetSmoothing();
     
+    // Clear canvas visual state
+    hudRenderer.clear();
+
     // Clean states
     stateMachine.reset();
     lastRepCount = 0;
