@@ -1,8 +1,8 @@
 /**
  * @fileoverview Layer 1: App Glue.
- * Binds UI control panel events, Layer 5 CameraManager, Layer 4 PoseEngine, 
- * Layer 3 MathEngine, Layer 2 StateMachine, SoundEngine, VoiceCoach, 
- * and Layer 1 HUDRenderer + SummaryModal.
+ * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
+ * StateMachine, Web Audio SoundEngine, Web Speech VoiceCoach,
+ * and 3D Holographic HUDRenderer + SummaryModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -23,6 +23,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const stopBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('stop-btn'));
   const logContainer = /** @type {HTMLElement|null} */ (document.getElementById('log'));
   const exerciseSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('exercise-select'));
+
+  // Spatial Floating HUD DOM elements
+  const sessionTimerEl = document.getElementById('session-timer');
+  const hudStatusBadgeEl = document.getElementById('hud-status-badge');
+  const hudRepCountEl = document.getElementById('hud-rep-count');
+  const hudStateDisplayEl = document.getElementById('hud-state-display');
 
   // Summary Modal DOM nodes
   const modalEl = document.getElementById('summary-modal');
@@ -65,7 +71,13 @@ document.addEventListener('DOMContentLoaded', () => {
   /** @type {number} */
   const TELEMETRY_THROTTLE_MS = 500;
 
-  // FSM state checkers
+  // Session Stopwatch Timer
+  /** @type {number} */
+  let sessionStartTime = 0;
+  /** @type {any} */
+  let sessionTimerInterval = null;
+
+  // FSM state trackers
   let lastRepCount = 0;
   let lastState = 'IDLE';
 
@@ -74,12 +86,74 @@ document.addEventListener('DOMContentLoaded', () => {
   let completedReps = [];
   let currentRepHasFault = false;
   let currentRepMinAngle = 180;
-  let initiatedRep = false; // Tracks partial range of motion for voice coaching
+  let initiatedRep = false;
+
+  /**
+   * Starts active workout timer.
+   */
+  const startSessionTimer = () => {
+    sessionStartTime = Date.now();
+    if (sessionTimerInterval) clearInterval(sessionTimerInterval);
+    
+    sessionTimerInterval = setInterval(() => {
+      const elapsedSec = Math.floor((Date.now() - sessionStartTime) / 1000);
+      const minutes = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+      const seconds = String(elapsedSec % 60).padStart(2, '0');
+      if (sessionTimerEl) {
+        sessionTimerEl.textContent = `${minutes}:${seconds}`;
+      }
+    }, 1000);
+  };
+
+  /**
+   * Halts workout timer.
+   */
+  const stopSessionTimer = () => {
+    if (sessionTimerInterval) {
+      clearInterval(sessionTimerInterval);
+      sessionTimerInterval = null;
+    }
+  };
+
+  /**
+   * Updates on-screen spatial floating glass badges.
+   * 
+   * @param {number} repCount
+   * @param {string} currentState
+   * @param {boolean} hasFault
+   */
+  const updateFloatingHUD = (repCount, currentState, hasFault) => {
+    if (hudRepCountEl) {
+      hudRepCountEl.textContent = String(repCount);
+    }
+    if (hudStateDisplayEl) {
+      hudStateDisplayEl.textContent = currentState;
+    }
+    if (hudStatusBadgeEl) {
+      hudStatusBadgeEl.className = 'hud-status-badge';
+      if (hasFault) {
+        hudStatusBadgeEl.classList.add('hud-status-badge--fault');
+        hudStatusBadgeEl.textContent = 'FAULT';
+      } else if (currentState === 'VALIDATED_SUCCESS') {
+        hudStatusBadgeEl.classList.add('hud-status-badge--validated');
+        hudStatusBadgeEl.textContent = 'SUCCESS';
+      } else if (currentState === 'IN_PROGRESS') {
+        hudStatusBadgeEl.classList.add('hud-status-badge--in-progress');
+        hudStatusBadgeEl.textContent = 'ACTIVE';
+      } else if (currentState === 'SETUP') {
+        hudStatusBadgeEl.classList.add('hud-status-badge--active');
+        hudStatusBadgeEl.textContent = 'ALIGNED';
+      } else {
+        hudStatusBadgeEl.classList.add('hud-status-badge--idle');
+        hudStatusBadgeEl.textContent = 'STANDBY';
+      }
+    }
+  };
 
   if (exerciseSelect) {
     exerciseSelect.addEventListener('change', () => {
       activeExercise = exerciseSelect.value;
-      writeLog(`Exercise rules switched to: ${activeExercise}`);
+      writeLog(`Biomechanics target switched to: ${activeExercise}`);
       
       // Reset state machine parameters
       stateMachine.reset();
@@ -93,13 +167,16 @@ document.addEventListener('DOMContentLoaded', () => {
       currentRepMinAngle = 180;
       initiatedRep = false;
 
+      // Reset spatial HUD badges
+      updateFloatingHUD(0, 'IDLE', false);
+
       // Clear visual frame overlay
       hudRenderer.clear();
     });
   }
 
   /**
-   * Appends messages to the console container.
+   * Appends messages to the telemetry log container.
    * @param {string} msg Message to write.
    * @param {boolean} [isError=false] Mark as error visually.
    */
@@ -120,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
     logContainer.scrollTop = logContainer.scrollHeight;
   };
 
-  // Initialize PoseEngine with a callback to calculate biomechanics and update UI/Audio
+  // Initialize PoseEngine with callback to process 3D landmarks at 60 FPS
   const poseEngine = new PoseEngine((results) => {
     const landmarks = results.poseLandmarks;
     const hasPose = !!(landmarks && landmarks.length > 0);
@@ -129,9 +206,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (newState !== trackingState) {
       trackingState = newState;
       if (hasPose) {
-        writeLog('Pose Tracking: Full Body Detected (33 Landmarks)');
+        writeLog('3D Spatial Pose: Body Tracking Active (33 Landmarks)');
       } else {
-        writeLog('Searching for body...');
+        writeLog('Scanning field for human silhouette...');
       }
     }
 
@@ -140,7 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let fsm = { currentState: 'IDLE', repCount: 0, hasFault: false, faultMessage: '' };
 
     if (hasPose) {
-      // 1. Calculate Joint Angles
+      // 1. Calculate Biomechanical Joint Angles
       if (activeExercise === 'SQUAT') {
         const joints = EXERCISE_RULES.SQUAT.joints;
 
@@ -195,7 +272,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // 2. FSM state transition updates
+      // 2. FSM state transition updates at 60 FPS
       fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
 
       // Track peak angles and fault flags during active repetition phases
@@ -214,36 +291,34 @@ document.addEventListener('DOMContentLoaded', () => {
         currentRepHasFault = true;
       }
 
-      // Voice coaching logic for partial/incomplete range of motion
+      // Voice coaching triggers for partial / incomplete range of motion
       if (initiatedRep) {
         if (activeExercise === 'SQUAT' && currentAngle > 150) {
-          // Returned to stand without satisfying depth <= 90
           if (fsm.repCount === lastRepCount && !fsm.hasFault) {
             voiceCoach.speak('Go lower');
           }
           initiatedRep = false;
         } else if (activeExercise === 'BICEP_CURL' && currentAngle > 145) {
-          // Returned to extension without satisfying contraction <= 45
           if (fsm.repCount === lastRepCount && !fsm.hasFault) {
-            voiceCoach.speak('Go higher'); // complete bicep contraction peak
+            voiceCoach.speak('Go higher');
           }
           initiatedRep = false;
         }
       }
 
-      // 3. Audio & Vocal feedback triggers on state transitions
+      // 3. Audio & Vocal feedback on rep / fault events
       if (fsm.repCount > lastRepCount) {
         soundEngine.playSuccessChime();
         voiceCoach.speak('Good rep');
 
-        // Archive completed rep statistics
+        // Archive completed rep metrics
         completedReps.push({
           repNum: fsm.repCount,
           hadFault: currentRepHasFault,
           peakAngle: currentRepMinAngle
         });
 
-        // Reset trackers for the next rep
+        // Reset trackers for next rep
         lastRepCount = fsm.repCount;
         currentRepHasFault = false;
         currentRepMinAngle = 180;
@@ -278,7 +353,10 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     }
 
-    // 5. Render Neon overlay and HUD visual elements at 60fps
+    // 5. Update Spatial HTML Floating Badges
+    updateFloatingHUD(fsm.repCount, fsm.currentState, fsm.hasFault);
+
+    // 6. Render 3D Holographic Skeletal Canvas at 60 FPS
     hudRenderer.render({
       landmarks: hasPose ? landmarks : [],
       activeAngle: currentAngle,
@@ -291,16 +369,16 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   /**
-   * Continuous loop dispatching video frames to MediaPipe Pose engine.
+   * Continuous animation loop with Retina HiDPI buffer synchronization.
    */
   const processFrameLoop = async () => {
     if (!isTrackingActive) {
       return;
     }
 
-    if (webcam.videoWidth > 0 && (canvas.width !== webcam.videoWidth || canvas.height !== webcam.videoHeight)) {
-      canvas.width = webcam.videoWidth;
-      canvas.height = webcam.videoHeight;
+    // Sync canvas buffer with Retina devicePixelRatio
+    if (webcam.videoWidth > 0 && webcam.videoHeight > 0) {
+      hudRenderer.syncDimensions(webcam.videoWidth, webcam.videoHeight);
     }
 
     if (webcam.readyState >= webcam.HAVE_CURRENT_DATA && !webcam.paused && !webcam.ended) {
@@ -315,10 +393,10 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   /**
-   * Starts coordinates detection.
+   * Starts tracking pipeline.
    */
   const startTracking = async () => {
-    writeLog('Initializing Pose Landmark Engine...');
+    writeLog('Initializing 3D Pose Extraction Engine...');
     await poseEngine.init();
     
     isTrackingActive = true;
@@ -335,6 +413,10 @@ document.addEventListener('DOMContentLoaded', () => {
     currentRepHasFault = false;
     currentRepMinAngle = 180;
     initiatedRep = false;
+
+    // Start session timer and update HUD
+    startSessionTimer();
+    updateFloatingHUD(0, 'SETUP', false);
 
     if (frameRequestIdx) {
       cancelAnimationFrame(frameRequestIdx);
@@ -353,7 +435,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     poseEngine.resetSmoothing();
     
-    // Clear canvas overlay visual state
+    // Halt session timer
+    stopSessionTimer();
+
+    // Clear canvas visual state
     hudRenderer.clear();
 
     // Clean states
@@ -361,6 +446,8 @@ document.addEventListener('DOMContentLoaded', () => {
     lastRepCount = 0;
     lastState = 'IDLE';
     trackingState = null;
+
+    updateFloatingHUD(0, 'STANDBY', false);
   };
 
   /**
@@ -378,7 +465,7 @@ document.addEventListener('DOMContentLoaded', () => {
     soundEngine.unlockContext();
     voiceCoach.speak('Workout started');
     
-    writeLog('Requesting camera stream...');
+    writeLog('Acquiring camera optical feed...');
     startBtn.disabled = true;
 
     try {
@@ -386,9 +473,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
         const settings = videoTrack.getSettings();
-        writeLog(`Camera active: ${settings.width}x${settings.height} (${cameraManager.getFacingMode()})`);
+        writeLog(`Optics active: ${settings.width}x${settings.height} (${cameraManager.getFacingMode()})`);
       } else {
-        writeLog('Camera active, but no video track found.', true);
+        writeLog('Optics active, but no video track found.', true);
       }
       
       await startTracking();
@@ -402,7 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   switchBtn.addEventListener('click', async () => {
-    writeLog('Toggling facing mode...');
+    writeLog('Toggling optical lens...');
     switchBtn.disabled = true;
 
     try {
@@ -411,7 +498,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
         const settings = videoTrack.getSettings();
-        writeLog(`Switched camera: ${settings.width}x${settings.height} (${cameraManager.getFacingMode()})`);
+        writeLog(`Optics switched: ${settings.width}x${settings.height} (${cameraManager.getFacingMode()})`);
       }
       switchBtn.disabled = false;
     } catch (error) {
@@ -423,7 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   stopBtn.addEventListener('click', () => {
-    writeLog('Releasing video streams...');
+    writeLog('Terminating optical stream...');
     voiceCoach.speak('Workout paused');
     
     // Evaluate set analytics
@@ -442,7 +529,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Stop all WebRTC tracks and frame loops
     stopTracking();
     cameraManager.stopStream();
-    writeLog('Stream terminated.');
+    writeLog('Session completed and archived.');
     updateUIState(false);
 
     // Launch analytics card

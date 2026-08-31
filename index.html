@@ -3,60 +3,111 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ApexForm AI - Gym Form Analyzer</title>
-  <meta name="theme-color" content="#121212">
+  <title>ApexForm AI - 3D Biomechanical HUD</title>
+  <meta name="theme-color" content="#030712">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  
+  <!-- Cyber-tech Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Orbitron:wght@600;700;800;900&display=swap" rel="stylesheet">
+
   <link rel="stylesheet" href="./css/variables.css">
   <link rel="stylesheet" href="./css/main.css">
+  
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
 </head>
 <body>
   <header class="header">
-    <h1 class="header__title">ApexForm AI</h1>
+    <div class="header__branding">
+      <h1 class="header__title">APEX<span class="header__title-accent">FORM</span></h1>
+      <span class="header__badge">3D HOLOGRAPHIC ENGINE</span>
+    </div>
   </header>
   
   <main class="main-content">
     <section class="media-frame">
       <video id="webcam" class="media-frame__video" playsinline autoplay muted></video>
       <canvas id="output-canvas" class="media-frame__canvas"></canvas>
+
+      <!-- Spatial Glassmorphic Floating HUD Overlays -->
+      <div class="hud-overlay">
+        <!-- Top Session Card -->
+        <div class="hud-card hud-card--top">
+          <div class="hud-card__session">
+            <div class="hud-ekg">
+              <svg viewBox="0 0 80 20" class="hud-ekg__svg" preserveAspectRatio="none">
+                <path class="hud-ekg__path" d="M0 10 L20 10 L25 3 L30 17 L35 7 L40 13 L45 10 L80 10" />
+              </svg>
+            </div>
+            <div class="hud-timer">
+              <span class="hud-timer__label">DURATION</span>
+              <span id="session-timer" class="hud-timer__value">00:00</span>
+            </div>
+          </div>
+          <div id="hud-status-badge" class="hud-status-badge hud-status-badge--idle">STANDBY</div>
+        </div>
+
+        <!-- Center-Left Rep Badge -->
+        <div class="hud-card hud-card--left">
+          <span class="hud-reps__label">REPS COMPLETED</span>
+          <span id="hud-rep-count" class="hud-reps__value">0</span>
+          <div class="hud-reps__sub">
+            <span class="hud-reps__sub-label">PHASE</span>
+            <span id="hud-state-display" class="hud-reps__sub-val">IDLE</span>
+          </div>
+        </div>
+      </div>
     </section>
     
     <nav class="control-panel">
-      <select id="exercise-select" class="btn btn--primary">
-        <option value="SQUAT">Squat Rules</option>
-        <option value="BICEP_CURL">Bicep Curl Rules</option>
-      </select>
-      <button id="start-btn" class="btn btn--primary">Start Stream</button>
-      <button id="switch-btn" class="btn btn--primary" disabled>Switch Camera</button>
-      <button id="stop-btn" class="btn btn--danger" disabled>Stop Stream</button>
+      <div class="select-wrapper">
+        <select id="exercise-select" class="btn btn--select">
+          <option value="SQUAT">Squat Biomechanics</option>
+          <option value="BICEP_CURL">Bicep Curl Biomechanics</option>
+        </select>
+      </div>
+      <button id="start-btn" class="btn btn--primary">
+        <span class="btn__icon">▶</span> Start Session
+      </button>
+      <button id="switch-btn" class="btn btn--secondary" disabled>
+        <span class="btn__icon">⟲</span> Flip Lens
+      </button>
+      <button id="stop-btn" class="btn btn--danger" disabled>
+        <span class="btn__icon">■</span> Finish Set
+      </button>
     </nav>
     
     <section class="log-panel">
-      <h2 class="log-panel__title">Console Log</h2>
-      <div id="log" class="log-panel__console">Ready to initialize stream...</div>
+      <div class="log-panel__header">
+        <span class="log-panel__indicator"></span>
+        <h2 class="log-panel__title">Telemetry Stream</h2>
+      </div>
+      <div id="log" class="log-panel__console">Ready to initialize 3D holographic pipeline...</div>
     </section>
   </main>
 
   <div id="summary-modal" class="modal">
     <div class="modal__content">
-      <h2 class="modal__title">Set Summary Analytics</h2>
+      <div class="modal__glow-sphere"></div>
+      <h2 class="modal__title">WORKOUT ANALYTICS</h2>
       <div class="modal__stats">
         <div class="modal__stat-item">
-          <span class="modal__stat-label">Total Reps</span>
+          <span class="modal__stat-label">TOTAL REPS</span>
           <span id="stat-reps" class="modal__stat-value">0</span>
         </div>
         <div class="modal__stat-item">
-          <span class="modal__stat-label">Form Accuracy</span>
+          <span class="modal__stat-label">FORM ACCURACY</span>
           <span id="stat-accuracy" class="modal__stat-value">100%</span>
         </div>
         <div class="modal__stat-item">
-          <span class="modal__stat-label">Average Peak Angle</span>
+          <span class="modal__stat-label">AVG PEAK DEPTH</span>
           <span id="stat-angle" class="modal__stat-value">0°</span>
         </div>
       </div>
-      <button id="modal-close-btn" class="btn btn--primary modal__close-btn">Save & Close</button>
+      <button id="modal-close-btn" class="btn btn--primary modal__close-btn">SAVE & ARCHIVE</button>
     </div>
   </div>
 
