@@ -1,6 +1,7 @@
 /**
  * @fileoverview Layer 1: Canvas HUD Renderer.
- * Renders the neon skeleton, joint angle badges, rep counters, and form fault warnings.
+ * Renders the neon skeleton, dynamic color-shifting joint angle arcs,
+ * setup alignment reticles, rep counters, and warnings.
  */
 
 /**
@@ -26,12 +27,12 @@ const SKELETON_CONNECTIONS = [
  */
 const COLORS = {
   BONE_DEFAULT: '#00F2FE', // Neon Cyan
-  BONE_ACTIVE_VALID: '#00FF87', // Neon Green
+  BONE_ACTIVE_CYAN: '#00F2FE', // Cyan (> 140)
+  BONE_ACTIVE_AMBER: '#FF9900', // Amber (91 - 140)
+  BONE_ACTIVE_VALID: '#00FF87', // Neon Green (<= 90)
   BONE_ACTIVE_FAULT: '#FF0055', // Neon Red/Orange
   WHITE: '#FFFFFF',
   CARD_BG: 'rgba(18, 18, 18, 0.85)',
-  CARD_BORDER: '#00F2FE',
-  CARD_BORDER_FAULT: '#FF0055',
   GLOW_SHADOW_COLOR: 'rgba(0, 242, 254, 0.4)',
   GLOW_SHADOW_COLOR_FAULT: 'rgba(255, 0, 85, 0.5)'
 };
@@ -63,6 +64,28 @@ export class HUDRenderer {
   }
 
   /**
+   * Returns active joint color based on form validity and degree thresholds.
+   * 
+   * @param {number} angle Joint angle in degrees.
+   * @param {boolean} hasFault Active posture violation.
+   * @returns {string} Hex color code.
+   * @private
+   */
+  _getJointColor(angle, hasFault) {
+    if (hasFault) {
+      return COLORS.BONE_ACTIVE_FAULT;
+    }
+    // Dynamic color shifting by thresholds
+    if (angle > 140) {
+      return COLORS.BONE_ACTIVE_CYAN;
+    }
+    if (angle > 90) {
+      return COLORS.BONE_ACTIVE_AMBER;
+    }
+    return COLORS.BONE_ACTIVE_VALID;
+  }
+
+  /**
    * Redraws the HUD screen overlay with skeleton segments, badges, and warnings.
    * 
    * @param {Object} renderPayload
@@ -80,7 +103,12 @@ export class HUDRenderer {
     const width = this.canvas.width;
     const height = this.canvas.height;
 
-    // 1. Draw HUD Card (Top-Left of user view / Top-Right of canvas coords due to CSS mirroring)
+    // 1. Draw pulsing reticle in SETUP state to guide user alignment
+    if (currentState === 'SETUP') {
+      this._drawTargetReticle(width, height);
+    }
+
+    // 2. Draw HUD analytics card (Top-Left of user view / Top-Right of canvas coords due to CSS mirroring)
     this._drawHUDCard(width, repCount, currentState, hasFault, faultMessage);
 
     // Guard against missing landmarks
@@ -88,10 +116,10 @@ export class HUDRenderer {
       return;
     }
 
-    // Determine the active joint color based on form validity
-    const activeColor = hasFault ? COLORS.BONE_ACTIVE_FAULT : COLORS.BONE_ACTIVE_VALID;
+    // Resolve color of the active exercise joint based on angle threshold dynamics
+    const activeColor = this._getJointColor(activeAngle, hasFault);
 
-    // 2. Draw Bones (Skeletal connections)
+    // 3. Draw Bones (Skeletal connections)
     this.ctx.save();
     for (let i = 0; i < SKELETON_CONNECTIONS.length; i++) {
       const [p1Index, p2Index] = SKELETON_CONNECTIONS[i];
@@ -118,7 +146,7 @@ export class HUDRenderer {
     }
     this.ctx.restore();
 
-    // 3. Draw Joint Points (Glowing points with white cores)
+    // 4. Draw Joint Points (Glowing points with white cores)
     this.ctx.save();
     for (let i = 0; i < landmarks.length; i++) {
       const lm = landmarks[i];
@@ -144,8 +172,54 @@ export class HUDRenderer {
     }
     this.ctx.restore();
 
-    // 4. Draw Active Joint Angle Badge
-    this._drawJointAngleBadge(landmarks, activeExercise, activeAngle, activeColor, width, height);
+    // 5. Draw Active Joint Angle Badge and Dynamic Angle Arc outline
+    this._drawJointAngleBadgeAndArc(landmarks, activeExercise, activeAngle, activeColor, width, height);
+  }
+
+  /**
+   * Draws a pulsing setup reticle at the center of the canvas.
+   * 
+   * @param {number} width Canvas width.
+   * @param {number} height Canvas height.
+   * @private
+   */
+  _drawTargetReticle(width, height) {
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const pulseFactor = Math.sin(Date.now() / 200) * 4;
+    const baseRadius = 40;
+    const radius = baseRadius + pulseFactor;
+
+    this.ctx.save();
+    this.ctx.strokeStyle = 'rgba(0, 242, 254, 0.4)';
+    this.ctx.lineWidth = 2;
+    this.ctx.shadowBlur = 6;
+    this.ctx.shadowColor = 'rgba(0, 242, 254, 0.3)';
+
+    // Outer pulsing circle
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    this.ctx.stroke();
+
+    // Inner crosshairs
+    const lineLength = 12;
+    this.ctx.beginPath();
+    
+    // Left
+    this.ctx.moveTo(centerX - radius - lineLength, centerY);
+    this.ctx.lineTo(centerX - radius + 4, centerY);
+    // Right
+    this.ctx.moveTo(centerX + radius - 4, centerY);
+    this.ctx.lineTo(centerX + radius + lineLength, centerY);
+    // Top
+    this.ctx.moveTo(centerX, centerY - radius - lineLength);
+    this.ctx.lineTo(centerX, centerY - radius + 4);
+    // Bottom
+    this.ctx.moveTo(centerX, centerY + radius - 4);
+    this.ctx.lineTo(centerX, centerY + radius + lineLength);
+
+    this.ctx.stroke();
+    this.ctx.restore();
   }
 
   /**
@@ -233,7 +307,7 @@ export class HUDRenderer {
   }
 
   /**
-   * Draws a glowing badge showing degrees directly at the joint vertex.
+   * Draws a glowing badge and an outline arc showing angle open size.
    * 
    * @param {Array<any>} landmarks
    * @param {string} exerciseKey
@@ -243,40 +317,60 @@ export class HUDRenderer {
    * @param {number} height Canvas height.
    * @private
    */
-  _drawJointAngleBadge(landmarks, exerciseKey, angle, activeColor, width, height) {
-    let vertexIndex = -1;
+  _drawJointAngleBadgeAndArc(landmarks, exerciseKey, angle, activeColor, width, height) {
+    let pA = null, pB = null, pC = null;
 
     if (exerciseKey === 'SQUAT') {
-      // Squat vertex: knee joint (Left Knee 25 or Right Knee 26 depending on detection)
-      const leftKnee = landmarks[25];
-      const rightKnee = landmarks[26];
-      const leftConf = leftKnee ? leftKnee.visibility : 0;
-      const rightConf = rightKnee ? rightKnee.visibility : 0;
+      // Squat vertex: knee joint (Left Knee 25 or Right Knee 26 depending on detection confidence)
+      const leftConf = landmarks[25] ? landmarks[25].visibility : 0;
+      const rightConf = landmarks[26] ? landmarks[26].visibility : 0;
       
-      vertexIndex = leftConf >= rightConf ? 25 : 26;
+      const isLeft = leftConf >= rightConf;
+      pA = landmarks[isLeft ? 23 : 24]; // Hip
+      pB = landmarks[isLeft ? 25 : 26]; // Knee
+      pC = landmarks[isLeft ? 27 : 28]; // Ankle
     } else if (exerciseKey === 'BICEP_CURL') {
       // Bicep Curl vertex: elbow joint (Left Elbow 13 or Right Elbow 14)
-      const leftElbow = landmarks[13];
-      const rightElbow = landmarks[14];
-      const leftConf = leftElbow ? leftElbow.visibility : 0;
-      const rightConf = rightElbow ? rightElbow.visibility : 0;
+      const leftConf = landmarks[13] ? landmarks[13].visibility : 0;
+      const rightConf = landmarks[14] ? landmarks[14].visibility : 0;
 
-      vertexIndex = leftConf >= rightConf ? 13 : 14;
+      const isLeft = leftConf >= rightConf;
+      pA = landmarks[isLeft ? 11 : 12]; // Shoulder
+      pB = landmarks[isLeft ? 13 : 14]; // Elbow
+      pC = landmarks[isLeft ? 15 : 16]; // Wrist
     }
 
-    const vertex = landmarks[vertexIndex];
-    if (!vertex || vertex.visibility < 0.5) {
+    if (!pA || !pB || !pC || pA.visibility < 0.5 || pB.visibility < 0.5 || pC.visibility < 0.5) {
       return;
     }
 
-    const xCoord = vertex.x * width;
-    const yCoord = vertex.y * height;
-    const radius = 22;
+    const xA = pA.x * width;
+    const yA = pA.y * height;
+    const xB = pB.x * width;
+    const yB = pB.y * height;
+    const xC = pC.x * width;
+    const yC = pC.y * height;
 
-    // Draw circular badge overlay
+    // Draw dynamic concentric angle arc
+    const angleStart = Math.atan2(yA - yB, xA - xB);
+    const angleEnd = Math.atan2(yC - yB, xC - xB);
+    const arcRadius = 38;
+
     this.ctx.save();
     this.ctx.beginPath();
-    this.ctx.arc(xCoord, yCoord, radius, 0, 2 * Math.PI);
+    this.ctx.arc(xB, yB, arcRadius, angleStart, angleEnd);
+    this.ctx.strokeStyle = activeColor;
+    this.ctx.lineWidth = 4;
+    this.ctx.shadowBlur = 6;
+    this.ctx.shadowColor = activeColor;
+    this.ctx.stroke();
+    this.ctx.restore();
+
+    // Draw circular badge overlay
+    const badgeRadius = 22;
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(xB, yB, badgeRadius, 0, 2 * Math.PI);
     this.ctx.fillStyle = 'rgba(18, 18, 18, 0.85)';
     this.ctx.strokeStyle = activeColor;
     this.ctx.lineWidth = 2.5;
@@ -289,8 +383,8 @@ export class HUDRenderer {
     // Draw angle text inside
     this._drawUnmirroredText(
       `${Math.round(angle)}°`,
-      xCoord,
-      yCoord,
+      xB,
+      yB,
       'bold 12px Arial, Helvetica, sans-serif',
       COLORS.WHITE,
       'center'

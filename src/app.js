@@ -1,7 +1,8 @@
 /**
  * @fileoverview Layer 1: App Glue.
  * Binds UI control panel events, Layer 5 CameraManager, Layer 4 PoseEngine, 
- * Layer 3 MathEngine, Layer 2 StateMachine + SoundEngine, and Layer 1 HUDRenderer.
+ * Layer 3 MathEngine, Layer 2 StateMachine, SoundEngine, VoiceCoach, 
+ * and Layer 1 HUDRenderer + SummaryModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -10,7 +11,9 @@ import { EXERCISE_RULES } from './config/exerciseRules.js';
 import { calculate3DAngle, calculateIncline, getConfidenceScore } from './core/mathEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
+import { VoiceCoach } from './logic/voiceCoach.js';
 import { HUDRenderer } from './ui/hudRenderer.js';
+import { SummaryModal } from './ui/summaryModal.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -21,7 +24,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const logContainer = /** @type {HTMLElement|null} */ (document.getElementById('log'));
   const exerciseSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('exercise-select'));
 
-  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer) {
+  // Summary Modal DOM nodes
+  const modalEl = document.getElementById('summary-modal');
+  const repsEl = document.getElementById('stat-reps');
+  const accuracyEl = document.getElementById('stat-accuracy');
+  const angleEl = document.getElementById('stat-angle');
+  const closeBtnEl = document.getElementById('modal-close-btn');
+
+  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer ||
+      !modalEl || !repsEl || !accuracyEl || !angleEl || !closeBtnEl) {
     console.error('ApexForm AI: Failed to initialize application glue due to missing DOM nodes.');
     return;
   }
@@ -29,7 +40,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const cameraManager = new CameraManager();
   const stateMachine = new StateMachine();
   const soundEngine = new SoundEngine();
+  const voiceCoach = new VoiceCoach();
   const hudRenderer = new HUDRenderer(canvas);
+  
+  const summaryModal = new SummaryModal(
+    /** @type {HTMLElement} */ (modalEl),
+    /** @type {HTMLElement} */ (repsEl),
+    /** @type {HTMLElement} */ (accuracyEl),
+    /** @type {HTMLElement} */ (angleEl),
+    /** @type {HTMLButtonElement} */ (closeBtnEl)
+  );
 
   /** @type {number|null} */
   let frameRequestIdx = null;
@@ -45,9 +65,16 @@ document.addEventListener('DOMContentLoaded', () => {
   /** @type {number} */
   const TELEMETRY_THROTTLE_MS = 500;
 
-  // Trackers to detect state changes and trigger sound cues
+  // FSM state checkers
   let lastRepCount = 0;
   let lastState = 'IDLE';
+
+  // Biomechanical set analytics tracking variables
+  /** @type {Array<{repNum: number, hadFault: boolean, peakAngle: number}>} */
+  let completedReps = [];
+  let currentRepHasFault = false;
+  let currentRepMinAngle = 180;
+  let initiatedRep = false; // Tracks partial range of motion for voice coaching
 
   if (exerciseSelect) {
     exerciseSelect.addEventListener('change', () => {
@@ -60,6 +87,12 @@ document.addEventListener('DOMContentLoaded', () => {
       lastState = 'IDLE';
       poseEngine.resetSmoothing();
       
+      // Clean analytics accumulators
+      completedReps = [];
+      currentRepHasFault = false;
+      currentRepMinAngle = 180;
+      initiatedRep = false;
+
       // Clear visual frame overlay
       hudRenderer.clear();
     });
@@ -162,16 +195,66 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // 2. FSM state transition updates at 60fps for real-time validation and audio feedback
+      // 2. FSM state transition updates
       fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
 
-      // 3. Audio triggers on state transitions
+      // Track peak angles and fault flags during active repetition phases
+      if (fsm.currentState === 'IN_PROGRESS') {
+        currentRepMinAngle = Math.min(currentRepMinAngle, currentAngle);
+        
+        // Track partial squat descents for voice prompting
+        if (activeExercise === 'SQUAT' && currentAngle < 130) {
+          initiatedRep = true;
+        } else if (activeExercise === 'BICEP_CURL' && currentAngle < 110) {
+          initiatedRep = true;
+        }
+      }
+
+      if (fsm.hasFault) {
+        currentRepHasFault = true;
+      }
+
+      // Voice coaching logic for partial/incomplete range of motion
+      if (initiatedRep) {
+        if (activeExercise === 'SQUAT' && currentAngle > 150) {
+          // Returned to stand without satisfying depth <= 90
+          if (fsm.repCount === lastRepCount && !fsm.hasFault) {
+            voiceCoach.speak('Go lower');
+          }
+          initiatedRep = false;
+        } else if (activeExercise === 'BICEP_CURL' && currentAngle > 145) {
+          // Returned to extension without satisfying contraction <= 45
+          if (fsm.repCount === lastRepCount && !fsm.hasFault) {
+            voiceCoach.speak('Go higher'); // complete bicep contraction peak
+          }
+          initiatedRep = false;
+        }
+      }
+
+      // 3. Audio & Vocal feedback triggers on state transitions
       if (fsm.repCount > lastRepCount) {
         soundEngine.playSuccessChime();
+        voiceCoach.speak('Good rep');
+
+        // Archive completed rep statistics
+        completedReps.push({
+          repNum: fsm.repCount,
+          hadFault: currentRepHasFault,
+          peakAngle: currentRepMinAngle
+        });
+
+        // Reset trackers for the next rep
         lastRepCount = fsm.repCount;
+        currentRepHasFault = false;
+        currentRepMinAngle = 180;
+        initiatedRep = false;
       }
+
       if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
         soundEngine.playFaultTone();
+        if (activeExercise === 'SQUAT') {
+          voiceCoach.speak('Chest up');
+        }
       }
       lastState = fsm.currentState;
 
@@ -187,7 +270,6 @@ document.addEventListener('DOMContentLoaded', () => {
         writeLog(logLine);
       }
     } else {
-      // Retain previous FSM state values if body tracking is lost
       fsm = {
         currentState: stateMachine.currentState,
         repCount: stateMachine.repCount,
@@ -216,7 +298,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Ensure the canvas width/height matches the video element output size dynamically
     if (webcam.videoWidth > 0 && (canvas.width !== webcam.videoWidth || canvas.height !== webcam.videoHeight)) {
       canvas.width = webcam.videoWidth;
       canvas.height = webcam.videoHeight;
@@ -249,6 +330,12 @@ document.addEventListener('DOMContentLoaded', () => {
     lastRepCount = 0;
     lastState = 'IDLE';
 
+    // Reset analytics trackers
+    completedReps = [];
+    currentRepHasFault = false;
+    currentRepMinAngle = 180;
+    initiatedRep = false;
+
     if (frameRequestIdx) {
       cancelAnimationFrame(frameRequestIdx);
     }
@@ -266,7 +353,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     poseEngine.resetSmoothing();
     
-    // Clear canvas visual state
+    // Clear canvas overlay visual state
     hudRenderer.clear();
 
     // Clean states
@@ -289,6 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
   startBtn.addEventListener('click', async () => {
     // Unlock AudioContext defensively inside user gesture block
     soundEngine.unlockContext();
+    voiceCoach.speak('Workout started');
     
     writeLog('Requesting camera stream...');
     startBtn.disabled = true;
@@ -336,9 +424,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   stopBtn.addEventListener('click', () => {
     writeLog('Releasing video streams...');
+    voiceCoach.speak('Workout paused');
+    
+    // Evaluate set analytics
+    const totalRepsCount = completedReps.length;
+    let accuracyRate = 100;
+    let avgDepthAngle = 0;
+
+    if (totalRepsCount > 0) {
+      const flawlessRepsCount = completedReps.filter(r => !r.hadFault).length;
+      accuracyRate = (flawlessRepsCount / totalRepsCount) * 100;
+      
+      const angleAccumulator = completedReps.reduce((sum, r) => sum + r.peakAngle, 0);
+      avgDepthAngle = angleAccumulator / totalRepsCount;
+    }
+
+    // Stop all WebRTC tracks and frame loops
     stopTracking();
     cameraManager.stopStream();
     writeLog('Stream terminated.');
     updateUIState(false);
+
+    // Launch analytics card
+    summaryModal.open({
+      totalReps: totalRepsCount,
+      accuracyRate,
+      avgDepthAngle,
+      exerciseKey: activeExercise
+    });
   });
 });
