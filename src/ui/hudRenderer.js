@@ -1,8 +1,11 @@
 /**
  * @fileoverview Layer 1: 3D Holographic Biomechanical Canvas HUD Renderer.
- * High-performance 60 FPS 2D canvas pipeline featuring multi-layered holographic bones,
- * Z-depth modulation, articulated concentric joint nodes, dynamic radial gauge arcs,
- * and laser crimson fault states.
+ * High-performance 60 FPS AR spatial pipeline featuring:
+ * - 3D floor perspective grid projecting beneath feet
+ * - Dynamic velocity-color-graded bar path / joint trajectory ribbon
+ * - Real-time bilateral symmetry balance HUD gauge
+ * - Knee cave (Valgus) outward corrective warning vectors
+ * - Multi-layered neon holographic skeleton with Z-depth perception
  */
 
 /**
@@ -40,7 +43,9 @@ const HOLO_COLORS = {
   MINT_ALPHA: 'rgba(0, 255, 135, 0.5)',
   CRIMSON: '#ff0055',
   CRIMSON_ALPHA: 'rgba(255, 0, 85, 0.55)',
-  WHITE: '#ffffff'
+  MAGENTA: '#ff00ea',
+  MAGENTA_ALPHA: 'rgba(255, 0, 234, 0.5)',
+  WHITE: '#ffffff',
 };
 
 export class HUDRenderer {
@@ -100,8 +105,7 @@ export class HUDRenderer {
   }
 
   /**
-   * Calculates a normalized depth factor [0.35, 1.0] from a MediaPipe landmark Z coordinate.
-   * Negative Z indicates closer to camera; positive indicates farther away.
+   * Calculates a normalized depth factor [0.35, 1.0] from a landmark Z coordinate.
    * 
    * @param {number} [z=0]
    * @returns {number}
@@ -145,11 +149,24 @@ export class HUDRenderer {
    * @param {number} payload.repCount
    * @param {boolean} payload.hasFault
    * @param {string} payload.faultMessage
+   * @param {Array<any>} [payload.barPath]
+   * @param {Object} [payload.symmetry]
+   * @param {Object} [payload.valgusResult]
    */
-  render({ landmarks, activeAngle, activeExercise, currentState, repCount, hasFault, faultMessage }) {
+  render({
+    landmarks,
+    activeAngle,
+    activeExercise,
+    currentState,
+    repCount,
+    hasFault,
+    faultMessage,
+    barPath = [],
+    symmetry = null,
+    valgusResult = null
+  }) {
     this.clear();
 
-    // Guard against empty landmarks
     if (!landmarks || landmarks.length === 0) {
       return;
     }
@@ -160,26 +177,310 @@ export class HUDRenderer {
     const now = performance.now();
 
     this.ctx.save();
-    // Scale context by device pixel ratio for crystal-clear Retina rendering
+    // Scale context for Retina/HiDPI displays
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const theme = this._getTheme(activeAngle, hasFault);
 
-    // 1. Draw 3D Depth-Modulated Multi-Layered Bones
+    // 1. AR 3D Floor Perspective Grid (below feet)
+    this._renderFloorGrid(landmarks, width, height, now);
+
+    // 2. Trailing Luminous Bar Path Ribbon (joint trajectory)
+    if (barPath && barPath.length > 1) {
+      this._renderBarPath(barPath, width, height);
+    }
+
+    // 3. 3D Depth-Modulated Multi-Layered Bones
     this._renderHolographicBones(landmarks, activeExercise, theme, hasFault, width, height);
 
-    // 2. Draw Articulated 3D Concentric Joint Nodes with White Anchor
+    // 4. Articulated Concentric Joint Nodes
     this._renderArticulatedNodes(landmarks, activeExercise, theme, now, width, height);
 
-    // 3. Draw 3D Biomechanical Radial Angle Gauge on Active Vertex
+    // 5. 3D Biomechanical Radial Angle Gauge
     this._renderRadialAngleGauge(landmarks, activeExercise, activeAngle, theme, now, width, height);
 
-    // 4. Fault Warning Laser HUD Banner (if posture breaks)
+    // 6. Bilateral Symmetry Real-Time HUD Balance Bar
+    if (symmetry) {
+      this._renderSymmetryGauge(symmetry, width, height);
+    }
+
+    // 7. Knee Cave (Valgus) Outward Corrective Warning Vectors
+    if (valgusResult && valgusResult.hasValgus && activeExercise === 'SQUAT') {
+      this._renderValgusWarning(valgusResult, width, height, now);
+    }
+
+    // 8. Laser Crimson Fault Warning Banner
     if (hasFault && faultMessage) {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
     this.ctx.restore();
+  }
+
+  /**
+   * Renders an animated, fading neon 3D floor perspective grid beneath the athlete's feet.
+   * 
+   * @param {Array<any>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderFloorGrid(landmarks, width, height, now) {
+    const leftAnkle = landmarks[27];
+    const rightAnkle = landmarks[28];
+
+    let anchorX = width / 2;
+    let feetY = height * 0.90;
+
+    if (leftAnkle && rightAnkle && leftAnkle.visibility > 0.4 && rightAnkle.visibility > 0.4) {
+      anchorX = ((leftAnkle.x + rightAnkle.x) / 2) * width;
+      feetY = Math.max(leftAnkle.y, rightAnkle.y) * height + 10;
+    }
+
+    const horizonY = feetY - (height * 0.10);
+    const bottomY = Math.min(height, feetY + (height * 0.22));
+
+    if (bottomY <= horizonY) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const gridLines = 9;
+    const baseSpread = width * 0.85;
+    const shift = (Math.sin(now / 400) * 8);
+
+    // Perspective radial rays
+    for (let i = 0; i < gridLines; i++) {
+      const t = (i / (gridLines - 1)) - 0.5; // -0.5 to 0.5
+      const startX = anchorX + (t * (baseSpread * 0.35)) + shift;
+      const endX = anchorX + (t * baseSpread * 1.5) + shift;
+
+      const grad = ctx.createLinearGradient(startX, horizonY, endX, bottomY);
+      grad.addColorStop(0, 'rgba(0, 242, 254, 0.0)');
+      grad.addColorStop(0.35, 'rgba(0, 242, 254, 0.35)');
+      grad.addColorStop(1, 'rgba(0, 242, 254, 0.05)');
+
+      ctx.beginPath();
+      ctx.moveTo(startX, horizonY);
+      ctx.lineTo(endX, bottomY);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+
+    // Horizontal depth rungs with progressive perspective spacing
+    const numRungs = 5;
+    for (let j = 1; j <= numRungs; j++) {
+      const p = Math.pow(j / numRungs, 1.8);
+      const rungY = horizonY + (p * (bottomY - horizonY));
+      const spread = (baseSpread * 0.35) + (p * baseSpread * 1.15);
+
+      const gradRung = ctx.createLinearGradient(anchorX - spread / 2, rungY, anchorX + spread / 2, rungY);
+      gradRung.addColorStop(0, 'rgba(0, 242, 254, 0.0)');
+      gradRung.addColorStop(0.5, `rgba(0, 242, 254, ${0.4 * (1 - p * 0.6)})`);
+      gradRung.addColorStop(1, 'rgba(0, 242, 254, 0.0)');
+
+      ctx.beginPath();
+      ctx.moveTo(anchorX - spread / 2 + shift, rungY);
+      ctx.lineTo(anchorX + spread / 2 + shift, rungY);
+      ctx.strokeStyle = gradRung;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders dynamic velocity-graded bar path trailing ribbon over the last 30 frames.
+   * 
+   * @param {Array<{ x: number, y: number, category: string, velocity: number }>} barPath
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderBarPath(barPath, width, height) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    for (let i = 1; i < barPath.length; i++) {
+      const pPrev = barPath[i - 1];
+      const pCurr = barPath[i];
+
+      const x1 = pPrev.x * width;
+      const y1 = pPrev.y * height;
+      const x2 = pCurr.x * width;
+      const y2 = pCurr.y * height;
+
+      const progress = i / barPath.length; // 0 (oldest) to 1 (newest)
+      const lineWidth = 1.5 + (progress * 5.0);
+
+      let strokeColor = HOLO_COLORS.CYAN;
+      if (pCurr.category === 'EXPLOSIVE') {
+        strokeColor = HOLO_COLORS.MAGENTA;
+      } else if (pCurr.category === 'FATIGUE') {
+        strokeColor = HOLO_COLORS.AMBER;
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineWidth = lineWidth;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = strokeColor;
+      ctx.shadowBlur = 10 * progress;
+      ctx.shadowColor = strokeColor;
+      ctx.stroke();
+    }
+
+    // Lead tracking point
+    const lead = barPath[barPath.length - 1];
+    if (lead) {
+      ctx.beginPath();
+      ctx.arc(lead.x * width, lead.y * height, 4.5, 0, 2 * Math.PI);
+      ctx.fillStyle = HOLO_COLORS.WHITE;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = HOLO_COLORS.CYAN;
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders real-time bilateral symmetry balance HUD gauge.
+   * 
+   * @param {{ leftPct: number, rightPct: number, symmetryScore: number }} symmetry
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderSymmetryGauge(symmetry, width, height) {
+    const ctx = this.ctx;
+    const gaugeWidth = 140;
+    const gaugeHeight = 18;
+    // Positioned in top-left of mirrored canvas -> displays top-right of screen
+    const x = 20;
+    const y = 20;
+
+    ctx.save();
+
+    // Background card
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.strokeStyle = 'rgba(0, 242, 254, 0.3)';
+    ctx.lineWidth = 1.2;
+    this._drawRoundedRect(ctx, x, y, gaugeWidth, gaugeHeight + 18, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    // Title text (unmirrored)
+    this._drawUnmirroredText(
+      `SYMMETRY: ${symmetry.symmetryScore}%`,
+      x + gaugeWidth / 2,
+      y + 8,
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.WHITE,
+      'center'
+    );
+
+    // Balance Bar
+    const barY = y + 17;
+    const barInnerW = gaugeWidth - 16;
+    const barX = x + 8;
+    const leftWidth = (symmetry.leftPct / 100) * barInnerW;
+
+    // Left fill
+    ctx.fillStyle = HOLO_COLORS.CYAN;
+    ctx.fillRect(barX, barY, leftWidth, 8);
+
+    // Right fill
+    ctx.fillStyle = HOLO_COLORS.MINT;
+    ctx.fillRect(barX + leftWidth, barY, barInnerW - leftWidth, 8);
+
+    // Center divider notch
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(barX + (barInnerW / 2) - 1, barY - 1, 2, 10);
+
+    // Text L/R labels (unmirrored)
+    this._drawUnmirroredText(
+      `L ${symmetry.leftPct}%`,
+      barX + 2,
+      barY + 12,
+      'bold 7px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.CYAN,
+      'left'
+    );
+    this._drawUnmirroredText(
+      `${symmetry.rightPct}% R`,
+      barX + barInnerW - 2,
+      barY + 12,
+      'bold 7px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.MINT,
+      'right'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders glowing outward corrective warning vectors on knee valgus.
+   * 
+   * @param {{ correctiveVector: { startX: number, startY: number, targetX: number, targetY: number } }} valgus
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderValgusWarning(valgus, width, height, now) {
+    const ctx = this.ctx;
+    const cv = valgus.correctiveVector;
+    const startX = cv.startX * width;
+    const startY = cv.startY * height;
+    const targetX = cv.targetX * width;
+    const targetY = cv.targetY * height;
+
+    const pulse = Math.sin(now / 120) * 3;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(targetX + pulse, targetY);
+    ctx.strokeStyle = HOLO_COLORS.AMBER;
+    ctx.lineWidth = 4.5;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = HOLO_COLORS.AMBER;
+    ctx.stroke();
+
+    // Outward Arrowhead
+    const angle = Math.atan2(targetY - startY, (targetX + pulse) - startX);
+    const arrowSize = 10;
+    ctx.beginPath();
+    ctx.moveTo(targetX + pulse, targetY);
+    ctx.lineTo(
+      targetX + pulse - arrowSize * Math.cos(angle - Math.PI / 6),
+      targetY - arrowSize * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.lineTo(
+      targetX + pulse - arrowSize * Math.cos(angle + Math.PI / 6),
+      targetY - arrowSize * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.closePath();
+    ctx.fillStyle = HOLO_COLORS.AMBER;
+    ctx.fill();
+
+    // Warning Badge Label near knee
+    this._drawUnmirroredText(
+      'PUSH KNEES OUT ⚠️',
+      startX,
+      startY - 22,
+      'bold 11px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.AMBER,
+      'center'
+    );
+
+    ctx.restore();
   }
 
   /**
@@ -205,7 +506,6 @@ export class HUDRenderer {
         continue;
       }
 
-      // Calculate depth from average Z
       const avgZ = ((p1.z || 0) + (p2.z || 0)) / 2;
       const depth = this._getDepthFactor(avgZ);
       const isActive = this._isActiveConnection(idx1, idx2, exerciseKey);

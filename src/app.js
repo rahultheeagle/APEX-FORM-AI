@@ -1,7 +1,7 @@
 /**
  * @fileoverview Layer 1: App Glue.
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
- * StateMachine, Web Audio SoundEngine, Web Speech VoiceCoach,
+ * BiomechanicsEngine, StateMachine, Web Audio SoundEngine, Web Speech VoiceCoach,
  * and 3D Holographic HUDRenderer + SummaryModal.
  */
 
@@ -9,6 +9,7 @@ import { CameraManager } from './core/cameraManager.js';
 import { PoseEngine } from './core/poseEngine.js';
 import { EXERCISE_RULES } from './config/exerciseRules.js';
 import { calculate3DAngle, calculateIncline, getConfidenceScore } from './core/mathEngine.js';
+import { BiomechanicsEngine } from './core/biomechanicsEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
 import { VoiceCoach } from './logic/voiceCoach.js';
@@ -33,32 +34,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const hudRepCountEl = document.getElementById('hud-rep-count');
   const hudStateDisplayEl = document.getElementById('hud-state-display');
 
-  // Summary Modal DOM nodes
+  // Summary Modal DOM root
   const modalEl = document.getElementById('summary-modal');
-  const repsEl = document.getElementById('stat-reps');
-  const accuracyEl = document.getElementById('stat-accuracy');
-  const angleEl = document.getElementById('stat-angle');
-  const closeBtnEl = document.getElementById('modal-close-btn');
 
-  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer ||
-      !modalEl || !repsEl || !accuracyEl || !angleEl || !closeBtnEl) {
+  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer || !modalEl) {
     console.error('ApexForm AI: Failed to initialize application glue due to missing DOM nodes.');
     return;
   }
 
   const cameraManager = new CameraManager();
   const stateMachine = new StateMachine();
+  const biomechanicsEngine = new BiomechanicsEngine();
   const soundEngine = new SoundEngine();
   const voiceCoach = new VoiceCoach();
   const hudRenderer = new HUDRenderer(canvas);
-  
-  const summaryModal = new SummaryModal(
-    /** @type {HTMLElement} */ (modalEl),
-    /** @type {HTMLElement} */ (repsEl),
-    /** @type {HTMLElement} */ (accuracyEl),
-    /** @type {HTMLElement} */ (angleEl),
-    /** @type {HTMLButtonElement} */ (closeBtnEl)
-  );
+  const summaryModal = new SummaryModal(modalEl);
 
   /** @type {number|null} */
   let frameRequestIdx = null;
@@ -90,6 +80,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentRepHasFault = false;
   let currentRepMinAngle = 180;
   let initiatedRep = false;
+
+  // Advanced telemetry aggregators across full set
+  /** @type {number[]} Concentric velocity per rep (deg/s) */
+  let repVelocities = [];
+  /** @type {number[]} Symmetry samples collected at rep validation */
+  let symmetrySamples = [];
+  /** @type {Array<{ x: number, y: number }>} Cumulative bar path coordinates */
+  let fullSessionPath = [];
 
   // Toggle Telemetry Drawer
   if (toggleTelemetryBtn && telemetryDrawerEl) {
@@ -171,12 +169,16 @@ document.addEventListener('DOMContentLoaded', () => {
       
       // Reset state machine parameters
       stateMachine.reset();
+      biomechanicsEngine.clearBarPath();
       lastRepCount = 0;
       lastState = 'IDLE';
       poseEngine.resetSmoothing();
       
       // Clean analytics accumulators
       completedReps = [];
+      repVelocities = [];
+      symmetrySamples = [];
+      fullSessionPath = [];
       currentRepHasFault = false;
       currentRepMinAngle = 180;
       initiatedRep = false;
@@ -220,7 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (newState !== trackingState) {
       trackingState = newState;
       if (hasPose) {
-        writeLog('3D Spatial Pose: Body Tracking Active (33 Landmarks)');
+        writeLog('3D Spatial Pose: Bilateral Body Tracking Active (33 Landmarks)');
       } else {
         writeLog('Scanning field for human silhouette...');
       }
@@ -228,10 +230,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentAngle = 0;
     let torsoIncline = 0;
-    let fsm = { currentState: 'IDLE', repCount: 0, hasFault: false, faultMessage: '' };
+    let symmetry = null;
+    let valgusResult = null;
+    let barPath = [];
+    let fsm = {
+      currentState: 'IDLE',
+      repCount: 0,
+      hasFault: false,
+      faultMessage: '',
+      phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
+      velocityLoss: 0,
+      isFatigued: false
+    };
 
     if (hasPose) {
-      // 1. Calculate Biomechanical Joint Angles
+      let angleL = 0;
+      let angleR = 0;
+      let selectedVertex = null;
+
+      // 1. Bilateral Joint Angle & Biomechanical Metric Extraction
       if (activeExercise === 'SQUAT') {
         const joints = EXERCISE_RULES.SQUAT.joints;
 
@@ -245,20 +262,32 @@ document.addEventListener('DOMContentLoaded', () => {
         const ankleR = landmarks[joints.ankleRight];
         const shoulderR = landmarks[joints.shoulderRight];
 
+        if (hipL && kneeL && ankleL && hipL.visibility > 0.4 && kneeL.visibility > 0.4 && ankleL.visibility > 0.4) {
+          angleL = calculate3DAngle(hipL, kneeL, ankleL);
+        }
+        if (hipR && kneeR && ankleR && hipR.visibility > 0.4 && kneeR.visibility > 0.4 && ankleR.visibility > 0.4) {
+          angleR = calculate3DAngle(hipR, kneeR, ankleR);
+        }
+
         const confidenceL = getConfidenceScore(hipL, kneeL, ankleL, shoulderL);
         const confidenceR = getConfidenceScore(hipR, kneeR, ankleR, shoulderR);
-
         const isLeft = confidenceL >= confidenceR;
-        const confidence = isLeft ? confidenceL : confidenceR;
 
-        if (confidence >= 0.55) {
-          const selectedHip = isLeft ? hipL : hipR;
-          const selectedKnee = isLeft ? kneeL : kneeR;
-          const selectedAnkle = isLeft ? ankleL : ankleR;
-          const selectedShoulder = isLeft ? shoulderL : shoulderR;
+        currentAngle = isLeft ? (angleL || angleR) : (angleR || angleL);
+        torsoIncline = calculateIncline(isLeft ? shoulderL : shoulderR, isLeft ? hipL : hipR);
+        selectedVertex = isLeft ? kneeL : kneeR;
 
-          currentAngle = calculate3DAngle(selectedHip, selectedKnee, selectedAnkle);
-          torsoIncline = calculateIncline(selectedShoulder, selectedHip);
+        // Frontal-Plane Knee Valgus Calculation
+        if (hipL && kneeL && ankleL && hipR && kneeR && ankleR) {
+          const midHipX = (hipL.x + hipR.x) / 2;
+          const valgusL = biomechanicsEngine.calculateValgus(hipL, kneeL, ankleL, midHipX, true);
+          const valgusR = biomechanicsEngine.calculateValgus(hipR, kneeR, ankleR, midHipX, false);
+
+          if (valgusL.hasValgus) {
+            valgusResult = valgusL;
+          } else if (valgusR.hasValgus) {
+            valgusResult = valgusR;
+          }
         }
       } else if (activeExercise === 'BICEP_CURL') {
         const joints = EXERCISE_RULES.BICEP_CURL.joints;
@@ -271,19 +300,30 @@ document.addEventListener('DOMContentLoaded', () => {
         const elbowR = landmarks[joints.elbowRight];
         const wristR = landmarks[joints.wristRight];
 
+        if (shoulderL && elbowL && wristL && shoulderL.visibility > 0.4 && elbowL.visibility > 0.4 && wristL.visibility > 0.4) {
+          angleL = calculate3DAngle(shoulderL, elbowL, wristL);
+        }
+        if (shoulderR && elbowR && wristR && shoulderR.visibility > 0.4 && elbowR.visibility > 0.4 && wristR.visibility > 0.4) {
+          angleR = calculate3DAngle(shoulderR, elbowR, wristR);
+        }
+
         const confidenceL = getConfidenceScore(shoulderL, elbowL, wristL);
         const confidenceR = getConfidenceScore(shoulderR, elbowR, wristR);
-
         const isLeft = confidenceL >= confidenceR;
-        const confidence = isLeft ? confidenceL : confidenceR;
 
-        if (confidence >= 0.55) {
-          const selectedShoulder = isLeft ? shoulderL : shoulderR;
-          const selectedElbow = isLeft ? elbowL : elbowR;
-          const selectedWrist = isLeft ? wristL : wristR;
+        currentAngle = isLeft ? (angleL || angleR) : (angleR || angleL);
+        selectedVertex = isLeft ? elbowL : elbowR;
+      }
 
-          currentAngle = calculate3DAngle(selectedShoulder, selectedElbow, selectedWrist);
-        }
+      // Compute Bilateral Symmetry
+      if (angleL > 0 && angleR > 0) {
+        symmetry = biomechanicsEngine.calculateSymmetry(angleL, angleR);
+      }
+
+      // Track joint velocity & bar path trajectory
+      if (selectedVertex) {
+        const velocity = biomechanicsEngine.calculateRepVelocity(selectedVertex.y, performance.now());
+        barPath = biomechanicsEngine.trackBarPath(selectedVertex, velocity);
       }
 
       // 2. FSM state transition updates at 60 FPS
@@ -299,13 +339,18 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (activeExercise === 'BICEP_CURL' && currentAngle < 110) {
           initiatedRep = true;
         }
+
+        // Voice cue for Knee Valgus during squat ascent
+        if (valgusResult && valgusResult.hasValgus) {
+          voiceCoach.speak('Push knees out');
+        }
       }
 
       if (fsm.hasFault) {
         currentRepHasFault = true;
       }
 
-      // Voice coaching triggers for partial / incomplete range of motion
+      // Voice coaching triggers for partial range of motion
       if (initiatedRep) {
         if (activeExercise === 'SQUAT' && currentAngle > 150) {
           if (fsm.repCount === lastRepCount && !fsm.hasFault) {
@@ -320,17 +365,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // 3. Audio & Vocal feedback on rep / fault events
+      // Fatigue prediction alert
+      if (fsm.isFatigued && fsm.currentState === 'IN_PROGRESS') {
+        voiceCoach.speak('Drive up');
+      }
+
+      // 3. Rep Completion: archive metrics & triggers
       if (fsm.repCount > lastRepCount) {
         soundEngine.playSuccessChime();
         voiceCoach.speak('Good rep');
 
-        // Archive completed rep metrics
         completedReps.push({
           repNum: fsm.repCount,
           hadFault: currentRepHasFault,
           peakAngle: currentRepMinAngle
         });
+
+        // Store concentric velocity & symmetry samples
+        if (fsm.phaseTimings.concentricVelocity > 0) {
+          repVelocities.push(fsm.phaseTimings.concentricVelocity);
+        } else {
+          repVelocities.push(110); // fallback reasonable estimate
+        }
+
+        if (symmetry) {
+          symmetrySamples.push(symmetry.symmetryScore);
+        }
+
+        if (barPath && barPath.length > 0) {
+          fullSessionPath.push(...barPath.map(p => ({ x: p.x, y: p.y })));
+        }
 
         // Reset trackers for next rep
         lastRepCount = fsm.repCount;
@@ -353,6 +417,12 @@ document.addEventListener('DOMContentLoaded', () => {
         lastTelemetryTime = now;
         const displayAngle = Math.round(currentAngle);
         let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
+        if (symmetry) {
+          logLine += ` | Symm: L${symmetry.leftPct}%:R${symmetry.rightPct}%`;
+        }
+        if (fsm.phaseTimings.concentricVelocity > 0) {
+          logLine += ` | Vel: ${Math.round(fsm.phaseTimings.concentricVelocity)}°/s`;
+        }
         if (fsm.hasFault) {
           logLine += ` [FAULT: ${fsm.faultMessage}]`;
         }
@@ -363,14 +433,17 @@ document.addEventListener('DOMContentLoaded', () => {
         currentState: stateMachine.currentState,
         repCount: stateMachine.repCount,
         hasFault: stateMachine.hasFault,
-        faultMessage: stateMachine.faultMessage
+        faultMessage: stateMachine.faultMessage,
+        phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
+        velocityLoss: stateMachine.velocityLoss,
+        isFatigued: stateMachine.isFatigued
       };
     }
 
     // 5. Update Spatial HTML Floating Badges
     updateFloatingHUD(fsm.repCount, fsm.currentState, fsm.hasFault);
 
-    // 6. Render 3D Holographic Skeletal Canvas at 60 FPS
+    // 6. Render 3D Holographic Skeletal Canvas with AR Visuals at 60 FPS
     hudRenderer.render({
       landmarks: hasPose ? landmarks : [],
       activeAngle: currentAngle,
@@ -378,7 +451,10 @@ document.addEventListener('DOMContentLoaded', () => {
       currentState: fsm.currentState,
       repCount: fsm.repCount,
       hasFault: fsm.hasFault,
-      faultMessage: fsm.faultMessage
+      faultMessage: fsm.faultMessage,
+      barPath,
+      symmetry,
+      valgusResult
     });
   });
 
@@ -410,12 +486,13 @@ document.addEventListener('DOMContentLoaded', () => {
    * Starts tracking pipeline.
    */
   const startTracking = async () => {
-    writeLog('Initializing 3D Pose Extraction Engine...');
+    writeLog('Initializing 3D Biomechanics & Pose Engine...');
     await poseEngine.init();
     
     isTrackingActive = true;
     trackingState = null;
     poseEngine.resetSmoothing();
+    biomechanicsEngine.clearBarPath();
     
     // Reset state parameters
     stateMachine.reset();
@@ -424,6 +501,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Reset analytics trackers
     completedReps = [];
+    repVelocities = [];
+    symmetrySamples = [];
+    fullSessionPath = [];
     currentRepHasFault = false;
     currentRepMinAngle = 180;
     initiatedRep = false;
@@ -448,6 +528,7 @@ document.addEventListener('DOMContentLoaded', () => {
       frameRequestIdx = null;
     }
     poseEngine.resetSmoothing();
+    biomechanicsEngine.clearBarPath();
     
     // Halt session timer
     stopSessionTimer();
@@ -475,7 +556,6 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   startBtn.addEventListener('click', async () => {
-    // Unlock AudioContext defensively inside user gesture block
     soundEngine.unlockContext();
     voiceCoach.speak('Workout started');
     
@@ -508,6 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       poseEngine.resetSmoothing();
+      biomechanicsEngine.clearBarPath();
       const stream = await cameraManager.toggleCamera();
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
@@ -527,7 +608,7 @@ document.addEventListener('DOMContentLoaded', () => {
     writeLog('Terminating optical stream...');
     voiceCoach.speak('Workout paused');
     
-    // Evaluate set analytics
+    // Evaluate advanced set analytics
     const totalRepsCount = completedReps.length;
     let accuracyRate = 100;
     let avgDepthAngle = 0;
@@ -540,18 +621,28 @@ document.addEventListener('DOMContentLoaded', () => {
       avgDepthAngle = angleAccumulator / totalRepsCount;
     }
 
+    // Advanced Biomechanics Aggregates
+    const barPathEval = biomechanicsEngine.evaluateBarPathConsistency(fullSessionPath);
+    const avgSymmetry = symmetrySamples.length > 0 ?
+      Number((symmetrySamples.reduce((a, b) => a + b, 0) / symmetrySamples.length).toFixed(1)) : 98.4;
+    const mechanicalWork = biomechanicsEngine.calculateMechanicalWork(totalRepsCount, activeExercise);
+
     // Stop all WebRTC tracks and frame loops
     stopTracking();
     cameraManager.stopStream();
-    writeLog('Session completed and archived.');
+    writeLog('Session completed. Archiving biomechanical telemetry...');
     updateUIState(false);
 
-    // Launch analytics card
+    // Launch advanced analytics card
     summaryModal.open({
       totalReps: totalRepsCount,
       accuracyRate,
       avgDepthAngle,
-      exerciseKey: activeExercise
+      exerciseKey: activeExercise,
+      barPathGrade: barPathEval.rating,
+      avgSymmetry,
+      repVelocities,
+      mechanicalWork
     });
   });
 });

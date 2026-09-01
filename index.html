@@ -115,6 +115,7 @@
     <div class="modal__content">
       <div class="modal__glow-sphere"></div>
       <h2 class="modal__title">WORKOUT ANALYTICS</h2>
+
       <div class="modal__stats">
         <div class="modal__stat-item">
           <span class="modal__stat-label">TOTAL REPS</span>
@@ -128,7 +129,26 @@
           <span class="modal__stat-label">AVG PEAK DEPTH</span>
           <span id="stat-angle" class="modal__stat-value">0°</span>
         </div>
+        <div class="modal__stat-item">
+          <span class="modal__stat-label">BAR PATH GRADE</span>
+          <span id="stat-barpath" class="modal__stat-value modal__stat-value--grade">A</span>
+        </div>
+        <div class="modal__stat-item">
+          <span class="modal__stat-label">AVG SYMMETRY</span>
+          <span id="stat-symmetry" class="modal__stat-value">98%</span>
+        </div>
+        <div class="modal__stat-item">
+          <span class="modal__stat-label">MECHANICAL WORK</span>
+          <span id="stat-work" class="modal__stat-value">0 kJ</span>
+        </div>
       </div>
+
+      <!-- Concentric Velocity Breakdown Chart -->
+      <div class="modal__velocity-section">
+        <span class="modal__velocity-title">CONCENTRIC VELOCITY PER REP (DEG/S)</span>
+        <div id="velocity-bars-container" class="modal__velocity-bars"></div>
+      </div>
+
       <button id="modal-close-btn" class="cyber-btn cyber-btn--primary modal__close-btn">SAVE & ARCHIVE</button>
     </div>
   </div>
