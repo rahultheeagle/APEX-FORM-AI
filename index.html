@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ApexForm AI - 3D Biomechanical HUD</title>
+  <title>ApexForm AI - 3D Holographic Biomechanical HUD</title>
   <meta name="theme-color" content="#030712">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -19,76 +19,98 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
 </head>
-<body>
-  <header class="header">
-    <div class="header__branding">
-      <h1 class="header__title">APEX<span class="header__title-accent">FORM</span></h1>
-      <span class="header__badge">3D HOLOGRAPHIC ENGINE</span>
+<body class="viewport-app">
+  <!-- Fullscreen Spatial Viewport -->
+  <main class="spatial-viewport">
+    <!-- Camera Feed and 3D Canvas Layer -->
+    <div class="viewport-media">
+      <video id="webcam" class="viewport-video" playsinline autoplay muted></video>
+      <canvas id="output-canvas" class="viewport-canvas"></canvas>
     </div>
-  </header>
-  
-  <main class="main-content">
-    <section class="media-frame">
-      <video id="webcam" class="media-frame__video" playsinline autoplay muted></video>
-      <canvas id="output-canvas" class="media-frame__canvas"></canvas>
 
-      <!-- Spatial Glassmorphic Floating HUD Overlays -->
-      <div class="hud-overlay">
-        <!-- Top Session Card -->
-        <div class="hud-card hud-card--top">
-          <div class="hud-card__session">
-            <div class="hud-ekg">
-              <svg viewBox="0 0 80 20" class="hud-ekg__svg" preserveAspectRatio="none">
-                <path class="hud-ekg__path" d="M0 10 L20 10 L25 3 L30 17 L35 7 L40 13 L45 10 L80 10" />
-              </svg>
-            </div>
-            <div class="hud-timer">
-              <span class="hud-timer__label">DURATION</span>
-              <span id="session-timer" class="hud-timer__value">00:00</span>
-            </div>
+    <!-- Full-Screen Spatial Floating Overlays -->
+    <div class="spatial-hud">
+      <!-- Top Session Bar -->
+      <header class="hud-topbar">
+        <div class="hud-topbar__left">
+          <div class="hud-live-pill">
+            <span class="hud-live-dot"></span>
+            <span class="hud-live-text">OPTICS LIVE</span>
           </div>
-          <div id="hud-status-badge" class="hud-status-badge hud-status-badge--idle">STANDBY</div>
-        </div>
-
-        <!-- Center-Left Rep Badge -->
-        <div class="hud-card hud-card--left">
-          <span class="hud-reps__label">REPS COMPLETED</span>
-          <span id="hud-rep-count" class="hud-reps__value">0</span>
-          <div class="hud-reps__sub">
-            <span class="hud-reps__sub-label">PHASE</span>
-            <span id="hud-state-display" class="hud-reps__sub-val">IDLE</span>
+          <div class="hud-timer-badge">
+            <span class="hud-timer-label">SESSION</span>
+            <span id="session-timer" class="hud-timer-value">00:00</span>
           </div>
         </div>
-      </div>
-    </section>
-    
-    <nav class="control-panel">
-      <div class="select-wrapper">
-        <select id="exercise-select" class="btn btn--select">
-          <option value="SQUAT">Squat Biomechanics</option>
-          <option value="BICEP_CURL">Bicep Curl Biomechanics</option>
-        </select>
-      </div>
-      <button id="start-btn" class="btn btn--primary">
-        <span class="btn__icon">▶</span> Start Session
-      </button>
-      <button id="switch-btn" class="btn btn--secondary" disabled>
-        <span class="btn__icon">⟲</span> Flip Lens
-      </button>
-      <button id="stop-btn" class="btn btn--danger" disabled>
-        <span class="btn__icon">■</span> Finish Set
-      </button>
-    </nav>
-    
-    <section class="log-panel">
-      <div class="log-panel__header">
-        <span class="log-panel__indicator"></span>
-        <h2 class="log-panel__title">Telemetry Stream</h2>
-      </div>
-      <div id="log" class="log-panel__console">Ready to initialize 3D holographic pipeline...</div>
-    </section>
+
+        <div class="hud-topbar__center">
+          <div class="brand-badge">
+            <span class="brand-badge__apex">APEX</span><span class="brand-badge__form">FORM</span>
+            <span class="brand-badge__tag">3D HOLOGRAPHIC</span>
+          </div>
+        </div>
+
+        <div class="hud-topbar__right">
+          <div id="exercise-badge" class="hud-exercise-pill">SQUAT</div>
+          <div id="hud-status-badge" class="hud-status-pill hud-status-pill--standby">STANDBY</div>
+        </div>
+      </header>
+
+      <!-- Center-Left Rep Counter Card -->
+      <aside class="hud-rep-card">
+        <div class="hud-rep-card__glow"></div>
+        <span class="hud-rep-card__tag">TOTAL REPS</span>
+        <span id="hud-rep-count" class="hud-rep-card__count">0</span>
+        <div class="hud-rep-card__status">
+          <span class="hud-rep-card__status-dot"></span>
+          <span id="hud-state-display" class="hud-rep-card__status-text">STANDBY</span>
+        </div>
+      </aside>
+
+      <!-- Bottom Floating Control Dock -->
+      <footer class="hud-dock">
+        <div class="hud-dock__glass">
+          <div class="select-cyber-wrap">
+            <select id="exercise-select" class="cyber-select">
+              <option value="SQUAT">Squat Biomechanics</option>
+              <option value="BICEP_CURL">Bicep Curl Biomechanics</option>
+            </select>
+          </div>
+
+          <button id="start-btn" class="cyber-btn cyber-btn--primary">
+            <span class="cyber-btn__icon">▶</span>
+            <span class="cyber-btn__text">Start Session</span>
+          </button>
+
+          <button id="switch-btn" class="cyber-btn cyber-btn--secondary" disabled>
+            <span class="cyber-btn__icon">⟲</span>
+            <span class="cyber-btn__text">Flip Lens</span>
+          </button>
+
+          <button id="stop-btn" class="cyber-btn cyber-btn--danger" disabled>
+            <span class="cyber-btn__icon">■</span>
+            <span class="cyber-btn__text">Finish Set</span>
+          </button>
+
+          <!-- Toggleable Telemetry Stream Pill -->
+          <button id="toggle-telemetry-btn" class="cyber-btn cyber-btn--ghost" title="Toggle Telemetry Stream">
+            <span class="cyber-btn__icon">⚡</span>
+          </button>
+        </div>
+
+        <!-- Telemetry Log Drawer (compact & expandable) -->
+        <div id="telemetry-drawer" class="telemetry-drawer telemetry-drawer--minimized">
+          <div class="telemetry-drawer__header">
+            <span class="telemetry-drawer__dot"></span>
+            <span class="telemetry-drawer__title">TELEMETRY STREAM</span>
+          </div>
+          <div id="log" class="telemetry-drawer__content">Ready to stream...</div>
+        </div>
+      </footer>
+    </div>
   </main>
 
+  <!-- Summary Modal Card -->
   <div id="summary-modal" class="modal">
     <div class="modal__content">
       <div class="modal__glow-sphere"></div>
@@ -107,7 +129,7 @@
           <span id="stat-angle" class="modal__stat-value">0°</span>
         </div>
       </div>
-      <button id="modal-close-btn" class="btn btn--primary modal__close-btn">SAVE & ARCHIVE</button>
+      <button id="modal-close-btn" class="cyber-btn cyber-btn--primary modal__close-btn">SAVE & ARCHIVE</button>
     </div>
   </div>
 

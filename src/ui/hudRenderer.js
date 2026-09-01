@@ -2,7 +2,7 @@
  * @fileoverview Layer 1: 3D Holographic Biomechanical Canvas HUD Renderer.
  * High-performance 60 FPS 2D canvas pipeline featuring multi-layered holographic bones,
  * Z-depth modulation, articulated concentric joint nodes, dynamic radial gauge arcs,
- * laser crimson fault states, and Retina/HiDPI display scaling.
+ * and laser crimson fault states.
  */
 
 /**
@@ -166,9 +166,9 @@ export class HUDRenderer {
     const theme = this._getTheme(activeAngle, hasFault);
 
     // 1. Draw 3D Depth-Modulated Multi-Layered Bones
-    this._renderHolographicBones(landmarks, activeExercise, theme, width, height);
+    this._renderHolographicBones(landmarks, activeExercise, theme, hasFault, width, height);
 
-    // 2. Draw Articulated 3D Concentric Joint Nodes
+    // 2. Draw Articulated 3D Concentric Joint Nodes with White Anchor
     this._renderArticulatedNodes(landmarks, activeExercise, theme, now, width, height);
 
     // 3. Draw 3D Biomechanical Radial Angle Gauge on Active Vertex
@@ -188,11 +188,12 @@ export class HUDRenderer {
    * @param {Array<any>} landmarks
    * @param {string} exerciseKey
    * @param {{ solid: string, alpha: string }} theme
+   * @param {boolean} hasFault
    * @param {number} width
    * @param {number} height
    * @private
    */
-  _renderHolographicBones(landmarks, exerciseKey, theme, width, height) {
+  _renderHolographicBones(landmarks, exerciseKey, theme, hasFault, width, height) {
     const ctx = this.ctx;
 
     for (let i = 0; i < SKELETON_CONNECTIONS.length; i++) {
@@ -208,6 +209,10 @@ export class HUDRenderer {
       const avgZ = ((p1.z || 0) + (p2.z || 0)) / 2;
       const depth = this._getDepthFactor(avgZ);
       const isActive = this._isActiveConnection(idx1, idx2, exerciseKey);
+      const isTorso = (idx1 === 11 && idx2 === 12) || (idx1 === 12 && idx2 === 24) || 
+                      (idx1 === 24 && idx2 === 23) || (idx1 === 23 && idx2 === 11);
+      
+      const isFaultedSegment = hasFault && (isTorso || isActive);
 
       const x1 = p1.x * width;
       const y1 = p1.y * height;
@@ -219,23 +224,32 @@ export class HUDRenderer {
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
 
-      const strokeColor = isActive ? theme.solid : HOLO_COLORS.CYAN;
+      let strokeColor = HOLO_COLORS.CYAN;
+      let alphaStroke = `rgba(0, 242, 254, ${0.45 * depth})`;
 
-      // PASS 1: Outer Holographic Glow
-      ctx.lineWidth = (isActive ? 7 : 4.5) * depth;
+      if (isFaultedSegment) {
+        strokeColor = HOLO_COLORS.CRIMSON;
+        alphaStroke = HOLO_COLORS.CRIMSON_ALPHA;
+      } else if (isActive) {
+        strokeColor = theme.solid;
+        alphaStroke = theme.alpha;
+      }
+
+      // PASS 1: Outer Glow Pass
+      ctx.lineWidth = 5 * depth;
       ctx.lineCap = 'round';
-      ctx.strokeStyle = isActive ? theme.alpha : `rgba(0, 242, 254, ${0.35 * depth})`;
-      ctx.shadowBlur = (isActive ? 16 : 10) * depth;
+      ctx.strokeStyle = alphaStroke;
+      ctx.shadowBlur = 14 * depth;
       ctx.shadowColor = strokeColor;
       ctx.stroke();
 
-      // PASS 2: Inner Laser Energy Core
+      // PASS 2: Inner Energy Core Pass
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
-      ctx.lineWidth = (isActive ? 2.5 : 1.5) * depth;
+      ctx.lineWidth = 2 * depth;
       ctx.strokeStyle = HOLO_COLORS.WHITE;
-      ctx.shadowBlur = 4 * depth;
+      ctx.shadowBlur = 3 * depth;
       ctx.shadowColor = HOLO_COLORS.WHITE;
       ctx.stroke();
 
@@ -244,7 +258,7 @@ export class HUDRenderer {
   }
 
   /**
-   * Renders multi-ring glowing articulated joint nodes.
+   * Renders glowing concentric rings on major joints with white core anchors.
    * 
    * @param {Array<any>} landmarks
    * @param {string} exerciseKey
@@ -276,8 +290,8 @@ export class HUDRenderer {
 
       ctx.save();
 
-      // Ring 1: Outer Pulsing Halo Ring
-      const pulse = Math.sin((now / 240) + idx) * 2;
+      // Outer Halo Ring
+      const pulse = Math.sin((now / 220) + idx) * 2;
       const outerRadius = Math.max(3, (7 + pulse) * depth);
 
       ctx.beginPath();
@@ -288,16 +302,16 @@ export class HUDRenderer {
       ctx.shadowColor = nodeColor;
       ctx.stroke();
 
-      // Ring 2: Solid Cyber Core
+      // Middle Cyber Ring
       const coreRadius = Math.max(2, 4 * depth);
       ctx.beginPath();
       ctx.arc(x, y, coreRadius, 0, 2 * Math.PI);
       ctx.fillStyle = nodeColor;
       ctx.fill();
 
-      // Ring 3: Pure White Center Spark
+      // White Center Anchor Dot
       ctx.beginPath();
-      ctx.arc(x, y, Math.max(1, 1.5 * depth), 0, 2 * Math.PI);
+      ctx.arc(x, y, Math.max(1, 1.8 * depth), 0, 2 * Math.PI);
       ctx.fillStyle = HOLO_COLORS.WHITE;
       ctx.shadowBlur = 0;
       ctx.fill();
@@ -354,27 +368,27 @@ export class HUDRenderer {
 
     ctx.save();
 
-    // Expanding ripple waves when target depth is reached (<= 90 deg)
+    // Expanding ripple pulse when target depth achieved (<= 90 deg)
     if (angle <= 90 && theme.solid === HOLO_COLORS.MINT) {
-      const ripplePhase = (now % 900) / 900;
-      const rippleRadius = 38 + (ripplePhase * 32);
+      const ripplePhase = (now % 800) / 800;
+      const rippleRadius = 40 + (ripplePhase * 36);
       const rippleAlpha = 1 - ripplePhase;
 
       ctx.beginPath();
       ctx.arc(xB, yB, rippleRadius, 0, 2 * Math.PI);
-      ctx.strokeStyle = `rgba(0, 255, 135, ${rippleAlpha * 0.7})`;
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(0, 255, 135, ${rippleAlpha * 0.8})`;
+      ctx.lineWidth = 2.5;
       ctx.stroke();
     }
 
     // Dynamic Concentric Gauge Arc
-    const gaugeRadius = 42;
+    const gaugeRadius = 44;
     ctx.beginPath();
     ctx.arc(xB, yB, gaugeRadius, angleA, angleC);
     ctx.strokeStyle = theme.solid;
     ctx.lineWidth = 5;
     ctx.lineCap = 'round';
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 14;
     ctx.shadowColor = theme.solid;
     ctx.stroke();
 
@@ -506,7 +520,7 @@ export class HUDRenderer {
     ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
     ctx.lineTo(x + radius, y + height);
     ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-    ctx.lineTo(x, y + radius);
+    ctx.lineTo(x + radius, y);
     ctx.quadraticCurveTo(x, y, x + radius, y);
     ctx.closePath();
   }

@@ -23,9 +23,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const stopBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('stop-btn'));
   const logContainer = /** @type {HTMLElement|null} */ (document.getElementById('log'));
   const exerciseSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('exercise-select'));
+  const toggleTelemetryBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('toggle-telemetry-btn'));
+  const telemetryDrawerEl = /** @type {HTMLElement|null} */ (document.getElementById('telemetry-drawer'));
 
   // Spatial Floating HUD DOM elements
   const sessionTimerEl = document.getElementById('session-timer');
+  const exerciseBadgeEl = document.getElementById('exercise-badge');
   const hudStatusBadgeEl = document.getElementById('hud-status-badge');
   const hudRepCountEl = document.getElementById('hud-rep-count');
   const hudStateDisplayEl = document.getElementById('hud-state-display');
@@ -88,6 +91,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentRepMinAngle = 180;
   let initiatedRep = false;
 
+  // Toggle Telemetry Drawer
+  if (toggleTelemetryBtn && telemetryDrawerEl) {
+    toggleTelemetryBtn.addEventListener('click', () => {
+      telemetryDrawerEl.classList.toggle('telemetry-drawer--minimized');
+      telemetryDrawerEl.classList.toggle('telemetry-drawer--expanded');
+    });
+  }
+
   /**
    * Starts active workout timer.
    */
@@ -130,21 +141,21 @@ document.addEventListener('DOMContentLoaded', () => {
       hudStateDisplayEl.textContent = currentState;
     }
     if (hudStatusBadgeEl) {
-      hudStatusBadgeEl.className = 'hud-status-badge';
+      hudStatusBadgeEl.className = 'hud-status-pill';
       if (hasFault) {
-        hudStatusBadgeEl.classList.add('hud-status-badge--fault');
+        hudStatusBadgeEl.classList.add('hud-status-pill--fault');
         hudStatusBadgeEl.textContent = 'FAULT';
       } else if (currentState === 'VALIDATED_SUCCESS') {
-        hudStatusBadgeEl.classList.add('hud-status-badge--validated');
+        hudStatusBadgeEl.classList.add('hud-status-pill--validated');
         hudStatusBadgeEl.textContent = 'SUCCESS';
       } else if (currentState === 'IN_PROGRESS') {
-        hudStatusBadgeEl.classList.add('hud-status-badge--in-progress');
+        hudStatusBadgeEl.classList.add('hud-status-pill--in-progress');
         hudStatusBadgeEl.textContent = 'ACTIVE';
       } else if (currentState === 'SETUP') {
-        hudStatusBadgeEl.classList.add('hud-status-badge--active');
+        hudStatusBadgeEl.classList.add('hud-status-pill--active');
         hudStatusBadgeEl.textContent = 'ALIGNED';
       } else {
-        hudStatusBadgeEl.classList.add('hud-status-badge--idle');
+        hudStatusBadgeEl.classList.add('hud-status-pill--standby');
         hudStatusBadgeEl.textContent = 'STANDBY';
       }
     }
@@ -153,6 +164,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (exerciseSelect) {
     exerciseSelect.addEventListener('change', () => {
       activeExercise = exerciseSelect.value;
+      if (exerciseBadgeEl) {
+        exerciseBadgeEl.textContent = activeExercise === 'SQUAT' ? 'SQUAT' : 'BICEP CURL';
+      }
       writeLog(`Biomechanics target switched to: ${activeExercise}`);
       
       // Reset state machine parameters
@@ -168,7 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
       initiatedRep = false;
 
       // Reset spatial HUD badges
-      updateFloatingHUD(0, 'IDLE', false);
+      updateFloatingHUD(0, 'STANDBY', false);
 
       // Clear visual frame overlay
       hudRenderer.clear();
@@ -279,7 +293,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (fsm.currentState === 'IN_PROGRESS') {
         currentRepMinAngle = Math.min(currentRepMinAngle, currentAngle);
         
-        // Track partial squat descents for voice prompting
+        // Track partial descents for voice coaching
         if (activeExercise === 'SQUAT' && currentAngle < 130) {
           initiatedRep = true;
         } else if (activeExercise === 'BICEP_CURL' && currentAngle < 110) {
