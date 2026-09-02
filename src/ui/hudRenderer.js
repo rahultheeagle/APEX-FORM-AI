@@ -209,12 +209,166 @@ export class HUDRenderer {
       this._renderValgusWarning(valgusResult, width, height, now);
     }
 
-    // 8. Laser Crimson Fault Warning Banner
+    // 8. Hands-Free Gesture Hold Confirmation Ring
+    if (gesture && gesture.holdProgress > 0) {
+      this._renderGestureHoldRing(gesture, width, height);
+    }
+
+    // 9. 3-1-1 Cadence Tempo Pace Ring
+    if (cadence) {
+      this._renderCadenceRing(cadence, width, height);
+    }
+
+    // 10. Laser Crimson Fault Warning Banner
     if (hasFault && faultMessage) {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
     this.ctx.restore();
+  }
+
+  /**
+   * Renders circular confirmation hold timer around active gesture joint.
+   * 
+   * @param {Object} gesture
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderGestureHoldRing(gesture, width, height) {
+    if (!gesture || !gesture.anchorPoint || gesture.holdProgress <= 0) return;
+
+    const ctx = this.ctx;
+    const x = gesture.anchorPoint.x * width;
+    const y = gesture.anchorPoint.y * height;
+    const radius = 28;
+    const progress = Math.min(1.0, gesture.holdProgress);
+
+    ctx.save();
+
+    // Background track
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    // Filling arc
+    const startAngle = -Math.PI / 2;
+    const endAngle = startAngle + (progress * 2 * Math.PI);
+
+    let ringColor = HOLO_COLORS.CYAN;
+    if (gesture.activeGesture === 'STOP') {
+      ringColor = HOLO_COLORS.CRIMSON;
+    } else if (gesture.activeGesture === 'PAUSE') {
+      ringColor = HOLO_COLORS.AMBER;
+    }
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius, startAngle, endAngle);
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = ringColor;
+    ctx.stroke();
+
+    // Label badge above ring (unmirrored)
+    const pct = Math.round(progress * 100);
+    this._drawUnmirroredText(
+      `${gesture.activeGesture} ${pct}%`,
+      x,
+      y - radius - 14,
+      'bold 11px "Orbitron", -apple-system, sans-serif',
+      ringColor,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the 3-1-1 cadence tempo ring gauge at the top-center of the canvas.
+   * 
+   * @param {Object} cadence
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderCadenceRing(cadence, width, height) {
+    if (!cadence || cadence.phase === 'REST') return;
+
+    const ctx = this.ctx;
+    const x = width / 2;
+    const y = 80;
+    const radius = 24;
+    const progress = Math.min(1.0, cadence.phaseProgress || 0);
+
+    ctx.save();
+
+    // Background circle
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.beginPath();
+    ctx.arc(x, y, radius + 4, 0, 2 * Math.PI);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+
+    // Active color by phase
+    let color = HOLO_COLORS.CYAN;
+    let phaseLabel = 'DOWN (3s)';
+
+    if (cadence.phase === 'ISOMETRIC') {
+      color = HOLO_COLORS.AMBER;
+      phaseLabel = 'HOLD (1s)';
+    } else if (cadence.phase === 'CONCENTRIC') {
+      color = HOLO_COLORS.MINT;
+      phaseLabel = 'UP (1s)';
+    }
+
+    if (cadence.isRushed) {
+      color = HOLO_COLORS.CRIMSON;
+      phaseLabel = 'RUSHED!';
+    }
+
+    // Sweeping progress arc
+    const startAngle = -Math.PI / 2;
+    const endAngle = startAngle + (progress * 2 * Math.PI);
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius, startAngle, endAngle);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = color;
+    ctx.stroke();
+
+    // Time Under Tension text (unmirrored)
+    this._drawUnmirroredText(
+      `${cadence.repTUT}s`,
+      x,
+      y,
+      'bold 10px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.WHITE,
+      'center'
+    );
+
+    // Label below ring
+    this._drawUnmirroredText(
+      phaseLabel,
+      x,
+      y + radius + 12,
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    ctx.restore();
   }
 
   /**

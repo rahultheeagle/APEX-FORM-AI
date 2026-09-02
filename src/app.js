@@ -1,8 +1,8 @@
 /**
  * @fileoverview Layer 1: App Glue.
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
- * BiomechanicsEngine, StateMachine, Web Audio SoundEngine, Web Speech VoiceCoach,
- * and 3D Holographic HUDRenderer + SummaryModal.
+ * BiomechanicsEngine, GestureController, CadenceEngine, StateMachine,
+ * Web Audio SoundEngine, Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -10,6 +10,8 @@ import { PoseEngine } from './core/poseEngine.js';
 import { EXERCISE_RULES } from './config/exerciseRules.js';
 import { calculate3DAngle, calculateIncline, getConfidenceScore } from './core/mathEngine.js';
 import { BiomechanicsEngine } from './core/biomechanicsEngine.js';
+import { GestureController } from './logic/gestureController.js';
+import { CadenceEngine } from './logic/cadenceEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
 import { VoiceCoach } from './logic/voiceCoach.js';
@@ -45,6 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const cameraManager = new CameraManager();
   const stateMachine = new StateMachine();
   const biomechanicsEngine = new BiomechanicsEngine();
+  const gestureController = new GestureController();
+  const cadenceEngine = new CadenceEngine();
   const soundEngine = new SoundEngine();
   const voiceCoach = new VoiceCoach();
   const hudRenderer = new HUDRenderer(canvas);
@@ -54,6 +58,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let frameRequestIdx = null;
   /** @type {boolean} */
   let isTrackingActive = false;
+  /** @type {boolean} */
+  let isTrackingPaused = false;
   /** @type {string|null} */
   let trackingState = null;
 
@@ -105,6 +111,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionTimerInterval) clearInterval(sessionTimerInterval);
     
     sessionTimerInterval = setInterval(() => {
+      if (isTrackingPaused) return; // Freeze clock when paused
+
       const elapsedSec = Math.floor((Date.now() - sessionStartTime) / 1000);
       const minutes = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
       const seconds = String(elapsedSec % 60).padStart(2, '0');
@@ -140,7 +148,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (hudStatusBadgeEl) {
       hudStatusBadgeEl.className = 'hud-status-pill';
-      if (hasFault) {
+      if (isTrackingPaused) {
+        hudStatusBadgeEl.classList.add('hud-status-pill--in-progress');
+        hudStatusBadgeEl.textContent = 'PAUSED';
+      } else if (hasFault) {
         hudStatusBadgeEl.classList.add('hud-status-pill--fault');
         hudStatusBadgeEl.textContent = 'FAULT';
       } else if (currentState === 'VALIDATED_SUCCESS') {
@@ -170,6 +181,9 @@ document.addEventListener('DOMContentLoaded', () => {
       // Reset state machine parameters
       stateMachine.reset();
       biomechanicsEngine.clearBarPath();
+      gestureController.reset();
+      cadenceEngine.reset();
+      isTrackingPaused = false;
       lastRepCount = 0;
       lastState = 'IDLE';
       poseEngine.resetSmoothing();
@@ -233,9 +247,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let symmetry = null;
     let valgusResult = null;
     let barPath = [];
+    let gestureResult = null;
+    let cadenceResult = null;
+
     let fsm = {
-      currentState: 'IDLE',
-      repCount: 0,
+      currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
+      repCount: stateMachine.repCount,
       hasFault: false,
       faultMessage: '',
       phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
@@ -244,6 +261,49 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (hasPose) {
+      // A. Evaluate Hands-Free Navigation Gestures
+      gestureResult = gestureController.detectGestures(landmarks, isTrackingActive && !isTrackingPaused);
+
+      if (gestureResult.triggeredEvent === 'PAUSE' && !isTrackingPaused) {
+        isTrackingPaused = true;
+        voiceCoach.speak('Workout paused');
+        writeLog('✋ [Gesture] Raised Arm detected: Workout Paused.');
+        updateFloatingHUD(stateMachine.repCount, 'PAUSED', false);
+      } else if (gestureResult.triggeredEvent === 'START_READY') {
+        if (isTrackingPaused) {
+          isTrackingPaused = false;
+          voiceCoach.speak('Workout resumed');
+          writeLog('▶️ [Gesture] Ready Stance detected: Workout Resumed.');
+        } else if (!isTrackingActive) {
+          writeLog('▶️ [Gesture] Ready Stance detected: Initiating Workout Session.');
+          startBtn.click();
+        }
+      } else if (gestureResult.triggeredEvent === 'STOP' && isTrackingActive) {
+        writeLog('⏹️ [Gesture] Crossed Arms detected: Finishing Set.');
+        voiceCoach.speak('Workout completed');
+        stopBtn.click();
+        return;
+      }
+
+      // If paused, render hold ring and freeze repetition counting
+      if (isTrackingPaused) {
+        hudRenderer.render({
+          landmarks,
+          activeAngle: 0,
+          activeExercise,
+          currentState: 'PAUSED',
+          repCount: stateMachine.repCount,
+          hasFault: false,
+          faultMessage: 'PAUSED: STAND STEADY OR RAISE WRIST TO RESUME',
+          barPath: [],
+          symmetry: null,
+          valgusResult: null,
+          gesture: gestureResult,
+          cadence: null
+        });
+        return;
+      }
+
       let angleL = 0;
       let angleR = 0;
       let selectedVertex = null;
@@ -328,6 +388,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 2. FSM state transition updates at 60 FPS
       fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
+
+      // B. Cadence 3-1-1 Tempo Coach Evaluation
+      cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
+
+      if (cadenceResult.isRushed && fsm.currentState === 'IN_PROGRESS' && !currentRepHasFault) {
+        voiceCoach.speak('Control your descent');
+      }
 
       // Track peak angles and fault flags during active repetition phases
       if (fsm.currentState === 'IN_PROGRESS') {
@@ -417,6 +484,9 @@ document.addEventListener('DOMContentLoaded', () => {
         lastTelemetryTime = now;
         const displayAngle = Math.round(currentAngle);
         let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
+        if (cadenceResult && cadenceResult.phase !== 'REST') {
+          logLine += ` | Cadence: ${cadenceResult.phase} (${cadenceResult.repTUT}s)`;
+        }
         if (symmetry) {
           logLine += ` | Symm: L${symmetry.leftPct}%:R${symmetry.rightPct}%`;
         }
@@ -454,7 +524,9 @@ document.addEventListener('DOMContentLoaded', () => {
       faultMessage: fsm.faultMessage,
       barPath,
       symmetry,
-      valgusResult
+      valgusResult,
+      gesture: gestureResult,
+      cadence: cadenceResult
     });
   });
 
@@ -490,9 +562,12 @@ document.addEventListener('DOMContentLoaded', () => {
     await poseEngine.init();
     
     isTrackingActive = true;
+    isTrackingPaused = false;
     trackingState = null;
     poseEngine.resetSmoothing();
     biomechanicsEngine.clearBarPath();
+    gestureController.reset();
+    cadenceEngine.reset();
     
     // Reset state parameters
     stateMachine.reset();
@@ -523,12 +598,15 @@ document.addEventListener('DOMContentLoaded', () => {
    */
   const stopTracking = () => {
     isTrackingActive = false;
+    isTrackingPaused = false;
     if (frameRequestIdx) {
       cancelAnimationFrame(frameRequestIdx);
       frameRequestIdx = null;
     }
     poseEngine.resetSmoothing();
     biomechanicsEngine.clearBarPath();
+    gestureController.reset();
+    cadenceEngine.reset();
     
     // Halt session timer
     stopSessionTimer();
@@ -589,6 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       poseEngine.resetSmoothing();
       biomechanicsEngine.clearBarPath();
+      gestureController.reset();
       const stream = await cameraManager.toggleCamera();
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
@@ -606,7 +685,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   stopBtn.addEventListener('click', () => {
     writeLog('Terminating optical stream...');
-    voiceCoach.speak('Workout paused');
+    voiceCoach.speak('Workout completed');
     
     // Evaluate advanced set analytics
     const totalRepsCount = completedReps.length;
