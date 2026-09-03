@@ -1,8 +1,8 @@
 /**
  * @fileoverview Layer 1: App Glue.
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
- * BiomechanicsEngine, GestureController, CadenceEngine, StateMachine,
- * Web Audio SoundEngine, Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal.
+ * BiomechanicsEngine, CalibrationEngine, GestureController, CadenceEngine,
+ * StateMachine, Web Audio SoundEngine, Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -10,6 +10,7 @@ import { PoseEngine } from './core/poseEngine.js';
 import { EXERCISE_RULES } from './config/exerciseRules.js';
 import { calculate3DAngle, calculateIncline, getConfidenceScore } from './core/mathEngine.js';
 import { BiomechanicsEngine } from './core/biomechanicsEngine.js';
+import { CalibrationEngine, ViewAngle } from './logic/calibrationEngine.js';
 import { GestureController } from './logic/gestureController.js';
 import { CadenceEngine } from './logic/cadenceEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
@@ -47,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const cameraManager = new CameraManager();
   const stateMachine = new StateMachine();
   const biomechanicsEngine = new BiomechanicsEngine();
+  const calibrationEngine = new CalibrationEngine();
   const gestureController = new GestureController();
   const cadenceEngine = new CadenceEngine();
   const soundEngine = new SoundEngine();
@@ -62,6 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let isTrackingPaused = false;
   /** @type {string|null} */
   let trackingState = null;
+  /** @type {string|null} */
+  let lastViewAngle = null;
 
   /** @type {string} */
   let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
@@ -151,6 +155,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (isTrackingPaused) {
         hudStatusBadgeEl.classList.add('hud-status-pill--in-progress');
         hudStatusBadgeEl.textContent = 'PAUSED';
+      } else if (currentState === 'CALIBRATING') {
+        hudStatusBadgeEl.classList.add('hud-status-pill--active');
+        hudStatusBadgeEl.textContent = 'CALIBRATING';
       } else if (hasFault) {
         hudStatusBadgeEl.classList.add('hud-status-pill--fault');
         hudStatusBadgeEl.textContent = 'FAULT';
@@ -181,11 +188,13 @@ document.addEventListener('DOMContentLoaded', () => {
       // Reset state machine parameters
       stateMachine.reset();
       biomechanicsEngine.clearBarPath();
+      calibrationEngine.reset();
       gestureController.reset();
       cadenceEngine.reset();
       isTrackingPaused = false;
       lastRepCount = 0;
       lastState = 'IDLE';
+      lastViewAngle = null;
       poseEngine.resetSmoothing();
       
       // Clean analytics accumulators
@@ -249,6 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let barPath = [];
     let gestureResult = null;
     let cadenceResult = null;
+    let calibrationResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -261,7 +271,31 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (hasPose) {
-      // A. Evaluate Hands-Free Navigation Gestures
+      // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
+      calibrationResult = calibrationEngine.evaluateFrame(landmarks);
+
+      // Announce viewpoint transition
+      if (calibrationResult.viewAngle !== lastViewAngle && isTrackingActive) {
+        if (calibrationResult.viewAngle === ViewAngle.SAGITTAL_VIEW) {
+          voiceCoach.speak('Side view detected, tracking squat depth.');
+          writeLog('📷 [Viewpoint] Sagittal (Side Profile) detected: Depth Optimized.');
+        } else {
+          voiceCoach.speak('Front view detected, tracking symmetry.');
+          writeLog('📷 [Viewpoint] Frontal Profile detected: Symmetry & Valgus Optimized.');
+        }
+        lastViewAngle = calibrationResult.viewAngle;
+      }
+
+      // Announce distance calibration guidance
+      if (!calibrationResult.isCalibrated && isTrackingActive) {
+        if (calibrationResult.calibrationMessage === 'STEP BACK SLIGHTLY') {
+          voiceCoach.speak('Step back slightly');
+        } else if (calibrationResult.calibrationMessage === 'STEP CLOSER TO CAMERA') {
+          voiceCoach.speak('Step closer to camera');
+        }
+      }
+
+      // 2. Evaluate Hands-Free Navigation Gestures
       gestureResult = gestureController.detectGestures(landmarks, isTrackingActive && !isTrackingPaused);
 
       if (gestureResult.triggeredEvent === 'PAUSE' && !isTrackingPaused) {
@@ -299,7 +333,8 @@ document.addEventListener('DOMContentLoaded', () => {
           symmetry: null,
           valgusResult: null,
           gesture: gestureResult,
-          cadence: null
+          cadence: null,
+          calibration: calibrationResult
         });
         return;
       }
@@ -308,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let angleR = 0;
       let selectedVertex = null;
 
-      // 1. Bilateral Joint Angle & Biomechanical Metric Extraction
+      // 3. Bilateral Joint Angle & Biomechanical Metric Extraction
       if (activeExercise === 'SQUAT') {
         const joints = EXERCISE_RULES.SQUAT.joints;
 
@@ -386,112 +421,123 @@ document.addEventListener('DOMContentLoaded', () => {
         barPath = biomechanicsEngine.trackBarPath(selectedVertex, velocity);
       }
 
-      // 2. FSM state transition updates at 60 FPS
-      fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
+      // 4. Gated State Machine & Cadence execution (Only active when calibrated)
+      if (calibrationResult && calibrationResult.isSteadyCalibrated) {
+        fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
+        cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
 
-      // B. Cadence 3-1-1 Tempo Coach Evaluation
-      cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
-
-      if (cadenceResult.isRushed && fsm.currentState === 'IN_PROGRESS' && !currentRepHasFault) {
-        voiceCoach.speak('Control your descent');
-      }
-
-      // Track peak angles and fault flags during active repetition phases
-      if (fsm.currentState === 'IN_PROGRESS') {
-        currentRepMinAngle = Math.min(currentRepMinAngle, currentAngle);
-        
-        // Track partial descents for voice coaching
-        if (activeExercise === 'SQUAT' && currentAngle < 130) {
-          initiatedRep = true;
-        } else if (activeExercise === 'BICEP_CURL' && currentAngle < 110) {
-          initiatedRep = true;
+        if (cadenceResult.isRushed && fsm.currentState === 'IN_PROGRESS' && !currentRepHasFault) {
+          voiceCoach.speak('Control your descent');
         }
 
-        // Voice cue for Knee Valgus during squat ascent
-        if (valgusResult && valgusResult.hasValgus) {
-          voiceCoach.speak('Push knees out');
-        }
-      }
-
-      if (fsm.hasFault) {
-        currentRepHasFault = true;
-      }
-
-      // Voice coaching triggers for partial range of motion
-      if (initiatedRep) {
-        if (activeExercise === 'SQUAT' && currentAngle > 150) {
-          if (fsm.repCount === lastRepCount && !fsm.hasFault) {
-            voiceCoach.speak('Go lower');
+        // Track peak angles and fault flags during active repetition phases
+        if (fsm.currentState === 'IN_PROGRESS') {
+          currentRepMinAngle = Math.min(currentRepMinAngle, currentAngle);
+          
+          // Track partial descents for voice coaching
+          if (activeExercise === 'SQUAT' && currentAngle < 130) {
+            initiatedRep = true;
+          } else if (activeExercise === 'BICEP_CURL' && currentAngle < 110) {
+            initiatedRep = true;
           }
-          initiatedRep = false;
-        } else if (activeExercise === 'BICEP_CURL' && currentAngle > 145) {
-          if (fsm.repCount === lastRepCount && !fsm.hasFault) {
-            voiceCoach.speak('Go higher');
+
+          // Voice cue for Knee Valgus during squat ascent
+          if (valgusResult && valgusResult.hasValgus) {
+            voiceCoach.speak('Drive knees outward');
           }
+        }
+
+        if (fsm.hasFault) {
+          currentRepHasFault = true;
+        }
+
+        // Voice coaching triggers for partial range of motion
+        if (initiatedRep) {
+          if (activeExercise === 'SQUAT' && currentAngle > 150) {
+            if (fsm.repCount === lastRepCount && !fsm.hasFault) {
+              voiceCoach.speak('Go lower');
+            }
+            initiatedRep = false;
+          } else if (activeExercise === 'BICEP_CURL' && currentAngle > 145) {
+            if (fsm.repCount === lastRepCount && !fsm.hasFault) {
+              voiceCoach.speak('Go higher');
+            }
+            initiatedRep = false;
+          }
+        }
+
+        // Fatigue prediction alert
+        if (fsm.isFatigued && fsm.currentState === 'IN_PROGRESS') {
+          voiceCoach.speak('Drive up');
+        }
+
+        // 5. Rep Completion: archive metrics & triggers
+        if (fsm.repCount > lastRepCount) {
+          soundEngine.playSuccessChime();
+          voiceCoach.speak('Rep complete.');
+
+          completedReps.push({
+            repNum: fsm.repCount,
+            hadFault: currentRepHasFault,
+            peakAngle: currentRepMinAngle
+          });
+
+          // Store concentric velocity & symmetry samples
+          if (fsm.phaseTimings.concentricVelocity > 0) {
+            repVelocities.push(fsm.phaseTimings.concentricVelocity);
+          } else {
+            repVelocities.push(110);
+          }
+
+          if (symmetry) {
+            symmetrySamples.push(symmetry.symmetryScore);
+          }
+
+          if (barPath && barPath.length > 0) {
+            fullSessionPath.push(...barPath.map(p => ({ x: p.x, y: p.y })));
+          }
+
+          // Reset trackers for next rep
+          lastRepCount = fsm.repCount;
+          currentRepHasFault = false;
+          currentRepMinAngle = 180;
           initiatedRep = false;
         }
+
+        if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
+          soundEngine.playFaultTone();
+          if (activeExercise === 'SQUAT') {
+            voiceCoach.speak('Chest up');
+          }
+        }
+        lastState = fsm.currentState;
+      } else {
+        // Gated: User is calibrating or establishing steady stance
+        fsm = {
+          currentState: 'CALIBRATING',
+          repCount: stateMachine.repCount,
+          hasFault: false,
+          faultMessage: '',
+          phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
+          velocityLoss: 0,
+          isFatigued: false
+        };
       }
 
-      // Fatigue prediction alert
-      if (fsm.isFatigued && fsm.currentState === 'IN_PROGRESS') {
-        voiceCoach.speak('Drive up');
-      }
-
-      // 3. Rep Completion: archive metrics & triggers
-      if (fsm.repCount > lastRepCount) {
-        soundEngine.playSuccessChime();
-        voiceCoach.speak('Good rep');
-
-        completedReps.push({
-          repNum: fsm.repCount,
-          hadFault: currentRepHasFault,
-          peakAngle: currentRepMinAngle
-        });
-
-        // Store concentric velocity & symmetry samples
-        if (fsm.phaseTimings.concentricVelocity > 0) {
-          repVelocities.push(fsm.phaseTimings.concentricVelocity);
-        } else {
-          repVelocities.push(110); // fallback reasonable estimate
-        }
-
-        if (symmetry) {
-          symmetrySamples.push(symmetry.symmetryScore);
-        }
-
-        if (barPath && barPath.length > 0) {
-          fullSessionPath.push(...barPath.map(p => ({ x: p.x, y: p.y })));
-        }
-
-        // Reset trackers for next rep
-        lastRepCount = fsm.repCount;
-        currentRepHasFault = false;
-        currentRepMinAngle = 180;
-        initiatedRep = false;
-      }
-
-      if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
-        soundEngine.playFaultTone();
-        if (activeExercise === 'SQUAT') {
-          voiceCoach.speak('Chest up');
-        }
-      }
-      lastState = fsm.currentState;
-
-      // 4. Log text updates throttled to avoid layout thrashing
+      // 6. Log text updates throttled to avoid layout thrashing
       const now = Date.now();
       if (now - lastTelemetryTime >= TELEMETRY_THROTTLE_MS) {
         lastTelemetryTime = now;
         const displayAngle = Math.round(currentAngle);
         let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
+        if (calibrationResult) {
+          logLine += ` | Calib: ${calibrationResult.calibrationMessage}`;
+        }
         if (cadenceResult && cadenceResult.phase !== 'REST') {
           logLine += ` | Cadence: ${cadenceResult.phase} (${cadenceResult.repTUT}s)`;
         }
         if (symmetry) {
           logLine += ` | Symm: L${symmetry.leftPct}%:R${symmetry.rightPct}%`;
-        }
-        if (fsm.phaseTimings.concentricVelocity > 0) {
-          logLine += ` | Vel: ${Math.round(fsm.phaseTimings.concentricVelocity)}°/s`;
         }
         if (fsm.hasFault) {
           logLine += ` [FAULT: ${fsm.faultMessage}]`;
@@ -510,10 +556,10 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     }
 
-    // 5. Update Spatial HTML Floating Badges
+    // 7. Update Spatial HTML Floating Badges
     updateFloatingHUD(fsm.repCount, fsm.currentState, fsm.hasFault);
 
-    // 6. Render 3D Holographic Skeletal Canvas with AR Visuals at 60 FPS
+    // 8. Render 3D Holographic Skeletal Canvas with Calibration Reticle at 60 FPS
     hudRenderer.render({
       landmarks: hasPose ? landmarks : [],
       activeAngle: currentAngle,
@@ -526,7 +572,8 @@ document.addEventListener('DOMContentLoaded', () => {
       symmetry,
       valgusResult,
       gesture: gestureResult,
-      cadence: cadenceResult
+      cadence: cadenceResult,
+      calibration: calibrationResult
     });
   });
 
@@ -558,14 +605,16 @@ document.addEventListener('DOMContentLoaded', () => {
    * Starts tracking pipeline.
    */
   const startTracking = async () => {
-    writeLog('Initializing 3D Biomechanics & Pose Engine...');
+    writeLog('Initializing 3D Biomechanics & Calibration Engine...');
     await poseEngine.init();
     
     isTrackingActive = true;
     isTrackingPaused = false;
     trackingState = null;
+    lastViewAngle = null;
     poseEngine.resetSmoothing();
     biomechanicsEngine.clearBarPath();
+    calibrationEngine.reset();
     gestureController.reset();
     cadenceEngine.reset();
     
@@ -585,7 +634,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Start session timer and update HUD
     startSessionTimer();
-    updateFloatingHUD(0, 'SETUP', false);
+    updateFloatingHUD(0, 'CALIBRATING', false);
 
     if (frameRequestIdx) {
       cancelAnimationFrame(frameRequestIdx);
@@ -605,6 +654,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     poseEngine.resetSmoothing();
     biomechanicsEngine.clearBarPath();
+    calibrationEngine.reset();
     gestureController.reset();
     cadenceEngine.reset();
     
@@ -619,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
     lastRepCount = 0;
     lastState = 'IDLE';
     trackingState = null;
+    lastViewAngle = null;
 
     updateFloatingHUD(0, 'STANDBY', false);
   };
@@ -667,7 +718,9 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       poseEngine.resetSmoothing();
       biomechanicsEngine.clearBarPath();
+      calibrationEngine.reset();
       gestureController.reset();
+      lastViewAngle = null;
       const stream = await cameraManager.toggleCamera();
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {

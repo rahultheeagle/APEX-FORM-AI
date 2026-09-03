@@ -219,12 +219,162 @@ export class HUDRenderer {
       this._renderCadenceRing(cadence, width, height);
     }
 
-    // 10. Laser Crimson Fault Warning Banner
+    // 10. Autonomous Calibration Reticle & Top Guidance Pill
+    if (calibration && !calibration.isSteadyCalibrated) {
+      this._renderCalibrationReticle(calibration, width, height, now);
+    }
+
+    // 11. Viewport Orientation Badge (Profile vs Frontal)
+    if (calibration) {
+      this._renderViewportBadge(calibration, width, height);
+    }
+
+    // 12. Laser Crimson Fault Warning Banner
     if (hasFault && faultMessage) {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
     this.ctx.restore();
+  }
+
+  /**
+   * Renders subtle corner alignment brackets and top guidance status pill during calibration.
+   * 
+   * @param {Object} calibration
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderCalibrationReticle(calibration, width, height, now) {
+    if (!calibration || calibration.isSteadyCalibrated) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    // 1. Draw Corner Alignment Brackets
+    const b = calibration.bounds || { minX: 0.2, minY: 0.1, maxX: 0.8, maxY: 0.9 };
+    const pad = 24;
+    const x1 = Math.max(10, (b.minX * width) - pad);
+    const y1 = Math.max(10, (b.minY * height) - pad);
+    const x2 = Math.min(width - 10, (b.maxX * width) + pad);
+    const y2 = Math.min(height - 10, (b.maxY * height) + pad);
+
+    const bracketLen = Math.min(30, (x2 - x1) * 0.2);
+    const color = calibration.isCalibrated ? HOLO_COLORS.MINT : HOLO_COLORS.AMBER;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = color;
+
+    // Top-Left
+    ctx.beginPath();
+    ctx.moveTo(x1 + bracketLen, y1);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x1, y1 + bracketLen);
+    ctx.stroke();
+
+    // Top-Right
+    ctx.beginPath();
+    ctx.moveTo(x2 - bracketLen, y1);
+    ctx.lineTo(x2, y1);
+    ctx.lineTo(x2, y1 + bracketLen);
+    ctx.stroke();
+
+    // Bottom-Left
+    ctx.beginPath();
+    ctx.moveTo(x1 + bracketLen, y2);
+    ctx.lineTo(x1, y2);
+    ctx.lineTo(x1, y2 - bracketLen);
+    ctx.stroke();
+
+    // Bottom-Right
+    ctx.beginPath();
+    ctx.moveTo(x2 - bracketLen, y2);
+    ctx.lineTo(x2, y2);
+    ctx.lineTo(x2, y2 - bracketLen);
+    ctx.stroke();
+
+    // 2. Pulsing Top Guidance Status Pill
+    const pillW = Math.min(280, width * 0.7);
+    const pillH = 34;
+    const px = (width - pillW) / 2;
+    const py = 25;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = color;
+
+    this._drawRoundedRect(ctx, px, py, pillW, pillH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // If holding steady, draw fill bar
+    if (calibration.holdProgress > 0 && !calibration.isSteadyCalibrated) {
+      const fillW = (pillW - 8) * calibration.holdProgress;
+      ctx.fillStyle = HOLO_COLORS.MINT;
+      ctx.fillRect(px + 4, py + pillH - 4, fillW, 2);
+    }
+
+    this._drawUnmirroredText(
+      calibration.calibrationMessage,
+      px + (pillW / 2),
+      py + (pillH / 2) - 1,
+      'bold 10px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Displays upper viewport orientation badge (Profile Depth vs Frontal Symmetry).
+   * 
+   * @param {Object} calibration
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderViewportBadge(calibration, width, height) {
+    if (!calibration) return;
+
+    const ctx = this.ctx;
+    const isSagittal = calibration.viewAngle === 'SAGITTAL_VIEW';
+    const text = isSagittal ? 'VIEW: PROFILE (DEPTH TRACKING)' : 'VIEW: FRONTAL (SYMMETRY TRACKING)';
+    const color = isSagittal ? HOLO_COLORS.MAGENTA : HOLO_COLORS.CYAN;
+
+    const badgeW = 220;
+    const badgeH = 22;
+    // Positioned in top-left of canvas -> appears top-right on mirrored display below symmetry bar
+    const x = 20;
+    const y = 62;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.80)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = color;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      text,
+      x + (badgeW / 2),
+      y + (badgeH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    ctx.restore();
   }
 
   /**
