@@ -2,7 +2,8 @@
  * @fileoverview Layer 1: App Glue.
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
  * BiomechanicsEngine, CalibrationEngine, GestureController, CadenceEngine,
- * StateMachine, Web Audio SoundEngine, Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal.
+ * StateMachine, Web Audio SoundEngine (with Spatial Panning & Depth Chimes),
+ * Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -66,6 +67,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let trackingState = null;
   /** @type {string|null} */
   let lastViewAngle = null;
+  /** @type {boolean} */
+  let lastLaserTriggered = false;
 
   /** @type {string} */
   let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
@@ -115,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionTimerInterval) clearInterval(sessionTimerInterval);
     
     sessionTimerInterval = setInterval(() => {
-      if (isTrackingPaused) return; // Freeze clock when paused
+      if (isTrackingPaused) return;
 
       const elapsedSec = Math.floor((Date.now() - sessionStartTime) / 1000);
       const minutes = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
@@ -195,6 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
       lastRepCount = 0;
       lastState = 'IDLE';
       lastViewAngle = null;
+      lastLaserTriggered = false;
       poseEngine.resetSmoothing();
       
       // Clean analytics accumulators
@@ -259,6 +263,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let gestureResult = null;
     let cadenceResult = null;
     let calibrationResult = null;
+    let targetDepthY = 0;
+    let isLaserTriggered = false;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -267,7 +273,10 @@ document.addEventListener('DOMContentLoaded', () => {
       faultMessage: '',
       phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
       velocityLoss: 0,
-      isFatigued: false
+      velocityLossPercent: 0,
+      rirEstimate: '3+ (FRESH)',
+      isFatigued: false,
+      lateralBalanceDelta: 0
     };
 
     if (hasPose) {
@@ -334,7 +343,9 @@ document.addEventListener('DOMContentLoaded', () => {
           valgusResult: null,
           gesture: gestureResult,
           cadence: null,
-          calibration: calibrationResult
+          calibration: calibrationResult,
+          laserDepth: null,
+          rirData: null
         });
         return;
       }
@@ -372,6 +383,12 @@ document.addEventListener('DOMContentLoaded', () => {
         torsoIncline = calculateIncline(isLeft ? shoulderL : shoulderR, isLeft ? hipL : hipR);
         selectedVertex = isLeft ? kneeL : kneeR;
 
+        // Laser Tripwire target depth calculation
+        if (kneeL && kneeR) {
+          targetDepthY = Math.max(kneeL.y, kneeR.y) * 480;
+          isLaserTriggered = currentAngle <= 90 && currentAngle > 0;
+        }
+
         // Frontal-Plane Knee Valgus Calculation
         if (hipL && kneeL && ankleL && hipR && kneeR && ankleR) {
           const midHipX = (hipL.x + hipR.x) / 2;
@@ -408,12 +425,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
         currentAngle = isLeft ? (angleL || angleR) : (angleR || angleL);
         selectedVertex = isLeft ? elbowL : elbowR;
+
+        if (elbowL && elbowR) {
+          targetDepthY = Math.max(elbowL.y, elbowR.y) * 480;
+          isLaserTriggered = currentAngle <= 50 && currentAngle > 0;
+        }
       }
 
-      // Compute Bilateral Symmetry
+      // Compute Bilateral Symmetry and 3D Spatial Audio Balance Delta
+      let lateralBalanceDelta = 0;
       if (angleL > 0 && angleR > 0) {
         symmetry = biomechanicsEngine.calculateSymmetry(angleL, angleR);
+        lateralBalanceDelta = (symmetry.rightPct - symmetry.leftPct) / 50;
+
+        // Trigger spatial audio balance warning if asymmetry > 15%
+        if (Math.abs(lateralBalanceDelta) > 0.15 && isTrackingActive) {
+          soundEngine.playBalanceWarning(lateralBalanceDelta);
+        }
       }
+
+      // Play laser depth hit chime on initial breach
+      if (isLaserTriggered && !lastLaserTriggered && isTrackingActive) {
+        soundEngine.playDepthChime(880);
+      }
+      lastLaserTriggered = isLaserTriggered;
 
       // Track joint velocity & bar path trajectory
       if (selectedVertex) {
@@ -423,7 +458,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 4. Gated State Machine & Cadence execution (Only active when calibrated)
       if (calibrationResult && calibrationResult.isSteadyCalibrated) {
-        fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline);
+        fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline, lateralBalanceDelta);
         cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
 
         if (cadenceResult.isRushed && fsm.currentState === 'IN_PROGRESS' && !currentRepHasFault) {
@@ -512,7 +547,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         lastState = fsm.currentState;
       } else {
-        // Gated: User is calibrating or establishing steady stance
         fsm = {
           currentState: 'CALIBRATING',
           repCount: stateMachine.repCount,
@@ -520,7 +554,10 @@ document.addEventListener('DOMContentLoaded', () => {
           faultMessage: '',
           phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
           velocityLoss: 0,
-          isFatigued: false
+          velocityLossPercent: 0,
+          rirEstimate: '3+ (FRESH)',
+          isFatigued: false,
+          lateralBalanceDelta: 0
         };
       }
 
@@ -530,11 +567,8 @@ document.addEventListener('DOMContentLoaded', () => {
         lastTelemetryTime = now;
         const displayAngle = Math.round(currentAngle);
         let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
-        if (calibrationResult) {
-          logLine += ` | Calib: ${calibrationResult.calibrationMessage}`;
-        }
-        if (cadenceResult && cadenceResult.phase !== 'REST') {
-          logLine += ` | Cadence: ${cadenceResult.phase} (${cadenceResult.repTUT}s)`;
+        if (fsm.rirEstimate) {
+          logLine += ` | RIR: ${fsm.rirEstimate}`;
         }
         if (symmetry) {
           logLine += ` | Symm: L${symmetry.leftPct}%:R${symmetry.rightPct}%`;
@@ -552,14 +586,17 @@ document.addEventListener('DOMContentLoaded', () => {
         faultMessage: stateMachine.faultMessage,
         phaseTimings: { eccentricDuration: 0, concentricDuration: 0, concentricVelocity: 0 },
         velocityLoss: stateMachine.velocityLoss,
-        isFatigued: stateMachine.isFatigued
+        velocityLossPercent: stateMachine.velocityLoss,
+        rirEstimate: '3+ (FRESH)',
+        isFatigued: stateMachine.isFatigued,
+        lateralBalanceDelta: 0
       };
     }
 
     // 7. Update Spatial HTML Floating Badges
     updateFloatingHUD(fsm.repCount, fsm.currentState, fsm.hasFault);
 
-    // 8. Render 3D Holographic Skeletal Canvas with Calibration Reticle at 60 FPS
+    // 8. Render 3D Holographic Skeletal Canvas with AR Laser & RIR Gauge at 60 FPS
     hudRenderer.render({
       landmarks: hasPose ? landmarks : [],
       activeAngle: currentAngle,
@@ -573,7 +610,9 @@ document.addEventListener('DOMContentLoaded', () => {
       valgusResult,
       gesture: gestureResult,
       cadence: cadenceResult,
-      calibration: calibrationResult
+      calibration: calibrationResult,
+      laserDepth: { targetY: targetDepthY, isTriggered: isLaserTriggered },
+      rirData: { rirEstimate: fsm.rirEstimate, velocityLossPercent: fsm.velocityLossPercent }
     });
   });
 
@@ -585,7 +624,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Sync canvas buffer with Retina devicePixelRatio
     if (webcam.videoWidth > 0 && webcam.videoHeight > 0) {
       hudRenderer.syncDimensions(webcam.videoWidth, webcam.videoHeight);
     }
@@ -612,6 +650,7 @@ document.addEventListener('DOMContentLoaded', () => {
     isTrackingPaused = false;
     trackingState = null;
     lastViewAngle = null;
+    lastLaserTriggered = false;
     poseEngine.resetSmoothing();
     biomechanicsEngine.clearBarPath();
     calibrationEngine.reset();
@@ -670,6 +709,7 @@ document.addEventListener('DOMContentLoaded', () => {
     lastState = 'IDLE';
     trackingState = null;
     lastViewAngle = null;
+    lastLaserTriggered = false;
 
     updateFloatingHUD(0, 'STANDBY', false);
   };
@@ -721,6 +761,7 @@ document.addEventListener('DOMContentLoaded', () => {
       calibrationEngine.reset();
       gestureController.reset();
       lastViewAngle = null;
+      lastLaserTriggered = false;
       const stream = await cameraManager.toggleCamera();
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {

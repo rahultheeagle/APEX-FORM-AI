@@ -229,12 +229,148 @@ export class HUDRenderer {
       this._renderViewportBadge(calibration, width, height);
     }
 
-    // 12. Laser Crimson Fault Warning Banner
+    // 12. AR Laser Depth Plane & Shockwave Particles
+    if (laserDepth && laserDepth.targetY > 0) {
+      this.drawLaserPlane(laserDepth.targetY, laserDepth.isTriggered, width, height, now);
+    }
+
+    // 13. Real-Time RIR (Reps in Reserve) & Fatigue Decay Gauge
+    if (rirData) {
+      this._renderRIRBadge(rirData, width, height);
+    }
+
+    // 14. Laser Crimson Fault Warning Banner
     if (hasFault && faultMessage) {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
     this.ctx.restore();
+  }
+
+  /**
+   * Draws a glowing AR laser depth tripwire across the frame with particle shockwaves upon breach.
+   * 
+   * @param {number} targetY Y-coordinate of the target depth line.
+   * @param {boolean} isTriggered True if athlete has hit/breached depth.
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   */
+  drawLaserPlane(targetY, isTriggered, width, height, now) {
+    if (targetY <= 0 || targetY >= height) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const beamColor = isTriggered ? HOLO_COLORS.MINT : HOLO_COLORS.CYAN;
+
+    // 1. Vertical Ambient Glow
+    const glowGrad = ctx.createLinearGradient(0, targetY - 18, 0, targetY + 18);
+    glowGrad.addColorStop(0, 'rgba(0, 242, 254, 0.0)');
+    glowGrad.addColorStop(0.5, isTriggered ? 'rgba(0, 255, 135, 0.35)' : 'rgba(0, 242, 254, 0.15)');
+    glowGrad.addColorStop(1, 'rgba(0, 242, 254, 0.0)');
+
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(0, targetY - 18, width, 36);
+
+    // 2. Core Laser Beam
+    ctx.beginPath();
+    ctx.moveTo(0, targetY);
+    ctx.lineTo(width, targetY);
+    ctx.strokeStyle = beamColor;
+    ctx.lineWidth = isTriggered ? 3.0 : 1.8;
+    ctx.shadowBlur = isTriggered ? 16 : 8;
+    ctx.shadowColor = beamColor;
+    ctx.stroke();
+
+    // 3. Shockwave Particle Bursts on Breach
+    if (isTriggered) {
+      const numNodes = 5;
+      const phase = (now % 600) / 600;
+      const radius = 4 + (phase * 18);
+      const ringAlpha = 1.0 - phase;
+
+      for (let i = 1; i <= numNodes; i++) {
+        const nodeX = (width / (numNodes + 1)) * i;
+
+        ctx.beginPath();
+        ctx.arc(nodeX, targetY, radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = `rgba(0, 255, 135, ${ringAlpha * 0.8})`;
+        ctx.lineWidth = 2.0;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(nodeX, targetY, 3, 0, 2 * Math.PI);
+        ctx.fillStyle = HOLO_COLORS.WHITE;
+        ctx.fill();
+      }
+    }
+
+    // 4. Floating Holographic Laser Tag (unmirrored)
+    const tagText = isTriggered ? '🎯 DEPTH PLANE HIT' : '⚡ TARGET DEPTH TRIPWIRE';
+    this._drawUnmirroredText(
+      tagText,
+      25,
+      targetY - 10,
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      beamColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders real-time RIR (Reps in Reserve) and velocity fatigue decay gauge badge.
+   * 
+   * @param {Object} rirData
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderRIRBadge(rirData, width, height) {
+    if (!rirData) return;
+
+    const ctx = this.ctx;
+    const rirText = rirData.rirEstimate || '3+ (FRESH)';
+    const lossPct = Math.round(rirData.velocityLossPercent || 0);
+
+    let color = HOLO_COLORS.MINT;
+    if (rirText.startsWith('2')) {
+      color = HOLO_COLORS.CYAN;
+    } else if (rirText.startsWith('1')) {
+      color = HOLO_COLORS.AMBER;
+    } else if (rirText.startsWith('0')) {
+      color = HOLO_COLORS.CRIMSON;
+    }
+
+    const badgeW = 160;
+    const badgeH = 22;
+    // Positioned in top-left of canvas -> appears top-right on mirrored screen
+    const x = 20;
+    const y = 88;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.80)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = color;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      `RIR: ${rirText} | -${lossPct}%`,
+      x + (badgeW / 2),
+      y + (badgeH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    ctx.restore();
   }
 
   /**

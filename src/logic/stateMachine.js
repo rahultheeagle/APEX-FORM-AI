@@ -1,7 +1,7 @@
 /**
  * @fileoverview Layer 2: Deterministic Exercise Repetition State Machine.
  * Tracks movement phases (descent, inflection, ascent), computes eccentric/concentric phase timings,
- * and analyzes velocity loss percentage to predict muscular fatigue.
+ * analyzes velocity decay percentage to predict Reps In Reserve (RIR), and monitors lateral balance deltas.
  */
 
 import { EXERCISE_RULES } from '../config/exerciseRules.js';
@@ -19,7 +19,7 @@ export const State = {
 };
 
 /**
- * Manages gym exercise transitions and repetition validation.
+ * Manages gym exercise transitions, repetition validation, and velocity decay telemetry.
  */
 export class StateMachine {
   constructor() {
@@ -34,7 +34,6 @@ export class StateMachine {
     /**
      * Set to true when the user reaches the inflection midpoint (squat bottom / curl peak).
      * @type {boolean}
-     * @private
      */
     this.midpointAchieved = false;
 
@@ -56,6 +55,8 @@ export class StateMachine {
     this.velocityLoss = 0;
     /** @type {boolean} True if velocity loss >= 25% */
     this.isFatigued = false;
+    /** @type {number} Asymmetry delta [-1.0 to 1.0] */
+    this.lateralBalanceDelta = 0;
 
     /** @type {number} Minimum angle achieved during descent */
     this.peakDepthAngle = 180;
@@ -80,6 +81,7 @@ export class StateMachine {
     this.baselineVelocities = [];
     this.velocityLoss = 0;
     this.isFatigued = false;
+    this.lateralBalanceDelta = 0;
     this.peakDepthAngle = 180;
 
     return {
@@ -93,8 +95,32 @@ export class StateMachine {
         concentricVelocity: 0
       },
       velocityLoss: 0,
-      isFatigued: false
+      velocityLossPercent: 0,
+      rirEstimate: '3+ (FRESH)',
+      isFatigued: false,
+      lateralBalanceDelta: 0,
     };
+  }
+
+  /**
+   * Computes estimated Reps in Reserve (RIR) based on velocity decay.
+   * @returns {string}
+   * @private
+   */
+  _calculateRIREstimate() {
+    if (this.baselineVelocities.length < 2 || this.repCount < 2) {
+      return '3+ (FRESH)';
+    }
+    if (this.velocityLoss < 10) {
+      return '3+ (FRESH)';
+    }
+    if (this.velocityLoss < 20) {
+      return '2 (MODERATE)';
+    }
+    if (this.velocityLoss < 30) {
+      return '1 (STRAIN)';
+    }
+    return '0 (FAILURE)';
   }
 
   /**
@@ -103,10 +129,12 @@ export class StateMachine {
    * @param {string} exerciseKey Selected exercise ('SQUAT' | 'BICEP_CURL').
    * @param {number} currentAngle Current joint angle in degrees.
    * @param {number} [torsoIncline=0] Torso tilt angle relative to vertical Y-axis (Squat only).
-   * @returns {{ currentState: string, repCount: number, hasFault: boolean, faultMessage: string, phaseTimings: { eccentricDuration: number, concentricDuration: number, concentricVelocity: number }, velocityLoss: number, isFatigued: boolean }}
+   * @param {number} [lateralBalanceDelta=0] Bilateral balance delta [-1.0 to 1.0].
+   * @returns {{ currentState: string, repCount: number, hasFault: boolean, faultMessage: string, phaseTimings: { eccentricDuration: number, concentricDuration: number, concentricVelocity: number }, velocityLoss: number, velocityLossPercent: number, rirEstimate: string, isFatigued: boolean, lateralBalanceDelta: number }}
    */
-  update(exerciseKey, currentAngle, torsoIncline = 0) {
+  update(exerciseKey, currentAngle, torsoIncline = 0, lateralBalanceDelta = 0) {
     const now = performance.now();
+    this.lateralBalanceDelta = lateralBalanceDelta;
 
     if (exerciseKey === 'SQUAT') {
       const config = EXERCISE_RULES.SQUAT;
@@ -234,7 +262,7 @@ export class StateMachine {
   }
 
   /**
-   * Helper to finalize repetition validation and compute velocity metrics.
+   * Helper to finalize repetition validation and compute velocity decay metrics.
    * 
    * @param {number} now
    * @param {number} currentAngle
@@ -285,7 +313,10 @@ export class StateMachine {
         concentricVelocity: this.lastConcentricVelocity,
       },
       velocityLoss: this.velocityLoss,
+      velocityLossPercent: this.velocityLoss,
+      rirEstimate: this._calculateRIREstimate(),
       isFatigued: this.isFatigued,
+      lateralBalanceDelta: this.lateralBalanceDelta,
     };
   }
 }
