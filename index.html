@@ -68,6 +68,27 @@
         </div>
       </aside>
 
+      <!-- Floating Picture-in-Picture AI Robotic Trainer Card -->
+      <aside id="robot-trainer-card" class="robot-trainer-card robot-trainer-card--active">
+        <div class="robot-trainer-card__header">
+          <span class="robot-trainer-card__badge">🤖 AI TRAINER // LOOP MODE</span>
+          <button id="robot-trainer-close-btn" class="robot-trainer-card__close" title="Minimize Trainer">✕</button>
+        </div>
+        <div class="robot-trainer-card__viewport">
+          <canvas id="robot-trainer-canvas" width="220" height="240"></canvas>
+          <div class="robot-trainer-card__phase-badge" id="robot-phase-badge">DESCENT</div>
+        </div>
+        <div class="robot-trainer-card__footer">
+          <div class="robot-sync-header">
+            <span class="robot-sync-label">SYNC ACCURACY</span>
+            <span id="robot-sync-text" class="robot-sync-val">SYNC: 100% [IN CADENCE]</span>
+          </div>
+          <div class="robot-sync-bar-wrap">
+            <div id="robot-sync-bar-fill" class="robot-sync-bar-fill" style="width: 100%;"></div>
+          </div>
+        </div>
+      </aside>
+
       <!-- Bottom Floating Control Dock -->
       <footer class="hud-dock">
         <div class="hud-dock__glass">
@@ -91,6 +112,12 @@
           <button id="stop-btn" class="cyber-btn cyber-btn--danger" disabled>
             <span class="cyber-btn__icon">■</span>
             <span class="cyber-btn__text">Finish Set</span>
+          </button>
+
+          <!-- Toggle Robot Trainer Button -->
+          <button id="toggle-trainer-btn" class="cyber-btn cyber-btn--ghost" title="Toggle AI Robot Trainer">
+            <span class="cyber-btn__icon">🤖</span>
+            <span class="cyber-btn__text">TRAINER</span>
           </button>
 
           <!-- Toggleable Telemetry Stream Pill -->

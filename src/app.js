@@ -3,7 +3,8 @@
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
  * BiomechanicsEngine, CalibrationEngine, GestureController, CadenceEngine,
  * StateMachine, Web Audio SoundEngine (with Spatial Panning & Depth Chimes),
- * Multilingual Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal + SettingsModal.
+ * Multilingual Web Speech VoiceCoach, AI Robotic Virtual Trainer,
+ * and 3D Holographic HUDRenderer + SummaryModal + SettingsModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -17,6 +18,7 @@ import { CadenceEngine } from './logic/cadenceEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
 import { VoiceCoach, PhraseKey } from './logic/voiceCoach.js';
+import { RobotTrainer } from './ui/robotTrainer.js';
 import { HUDRenderer } from './ui/hudRenderer.js';
 import { SummaryModal } from './ui/summaryModal.js';
 import { SettingsModal } from './ui/settingsModal.js';
@@ -32,6 +34,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const toggleTelemetryBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('toggle-telemetry-btn'));
   const telemetryDrawerEl = /** @type {HTMLElement|null} */ (document.getElementById('telemetry-drawer'));
   const settingsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('settings-btn'));
+
+  // AI Robotic Trainer DOM Elements
+  const robotTrainerCardEl = document.getElementById('robot-trainer-card');
+  const robotTrainerCanvas = /** @type {HTMLCanvasElement|null} */ (document.getElementById('robot-trainer-canvas'));
+  const robotTrainerCloseBtn = document.getElementById('robot-trainer-close-btn');
+  const toggleTrainerBtn = document.getElementById('toggle-trainer-btn');
+  const robotPhaseBadgeEl = document.getElementById('robot-phase-badge');
+  const robotSyncTextEl = document.getElementById('robot-sync-text');
+  const robotSyncBarFillEl = document.getElementById('robot-sync-bar-fill');
 
   // Spatial Floating HUD DOM elements
   const sessionTimerEl = document.getElementById('session-timer');
@@ -61,6 +72,85 @@ document.addEventListener('DOMContentLoaded', () => {
   const summaryModal = new SummaryModal(summaryModalEl);
   const settingsModal = new SettingsModal(settingsModalEl, voiceCoach);
 
+  /** @type {string} */
+  let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
+  const robotTrainer = new RobotTrainer(activeExercise);
+  robotTrainer.start();
+
+  let isTrainerActive = true;
+  let lastUserAngle = 0;
+  let lowSyncStartTime = 0;
+
+  // Toggle AI Trainer PiP window
+  const toggleTrainer = () => {
+    isTrainerActive = !isTrainerActive;
+    if (robotTrainerCardEl) {
+      robotTrainerCardEl.classList.toggle('robot-trainer-card--active', isTrainerActive);
+    }
+  };
+
+  if (toggleTrainerBtn) toggleTrainerBtn.addEventListener('click', toggleTrainer);
+  if (robotTrainerCloseBtn) {
+    robotTrainerCloseBtn.addEventListener('click', () => {
+      isTrainerActive = false;
+      if (robotTrainerCardEl) robotTrainerCardEl.classList.remove('robot-trainer-card--active');
+    });
+  }
+
+  // Robot Trainer continuous 60 FPS animation loop
+  const renderRobotTrainerLoop = (timestamp) => {
+    if (isTrainerActive && robotTrainerCanvas) {
+      const trainerCtx = robotTrainerCanvas.getContext('2d');
+      if (trainerCtx) {
+        trainerCtx.clearRect(0, 0, robotTrainerCanvas.width, robotTrainerCanvas.height);
+        robotTrainer.drawRobot(trainerCtx, robotTrainerCanvas.width / 2, robotTrainerCanvas.height - 35, 0.76, timestamp);
+      }
+
+      const cycle = robotTrainer.getCycleState(timestamp);
+      if (robotPhaseBadgeEl) {
+        robotPhaseBadgeEl.textContent = cycle.phase;
+      }
+
+      // Sync evaluation against active user pose
+      if (isTrackingActive && !isTrackingPaused && lastUserAngle > 0) {
+        const sync = robotTrainer.getSyncStatus(lastUserAngle, timestamp);
+        if (robotSyncTextEl) {
+          robotSyncTextEl.textContent = `SYNC: ${sync.score}% [${sync.status}]`;
+          robotSyncTextEl.style.color = sync.color;
+        }
+        if (robotSyncBarFillEl) {
+          robotSyncBarFillEl.style.width = `${sync.score}%`;
+          robotSyncBarFillEl.style.background = sync.color;
+        }
+
+        // Voice Cue if sync is below 60% for > 3.0s
+        if (sync.score < 60) {
+          if (!lowSyncStartTime) {
+            lowSyncStartTime = timestamp;
+          } else if (timestamp - lowSyncStartTime > 3000) {
+            voiceCoach.speakPhrase(PhraseKey.MATCH_TRAINER_PACE);
+            lowSyncStartTime = timestamp; // Reset after cue
+          }
+        } else {
+          lowSyncStartTime = 0;
+        }
+      } else {
+        if (robotSyncTextEl) {
+          robotSyncTextEl.textContent = 'SYNC: 100% [STANDBY]';
+          robotSyncTextEl.style.color = '#00ff87';
+        }
+        if (robotSyncBarFillEl) {
+          robotSyncBarFillEl.style.width = '100%';
+          robotSyncBarFillEl.style.background = '#00ff87';
+        }
+        lowSyncStartTime = 0;
+      }
+    }
+
+    requestAnimationFrame(renderRobotTrainerLoop);
+  };
+  requestAnimationFrame(renderRobotTrainerLoop);
+
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
       settingsModal.toggle();
@@ -80,8 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
   /** @type {boolean} */
   let lastLaserTriggered = false;
 
-  /** @type {string} */
-  let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
   /** @type {number} */
   let lastTelemetryTime = 0;
   /** @type {number} */
@@ -193,6 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (exerciseSelect) {
     exerciseSelect.addEventListener('change', () => {
       activeExercise = exerciseSelect.value;
+      robotTrainer.setExercise(activeExercise);
       if (exerciseBadgeEl) {
         exerciseBadgeEl.textContent = activeExercise === 'SQUAT' ? 'SQUAT' : 'BICEP CURL';
       }
@@ -209,6 +298,8 @@ document.addEventListener('DOMContentLoaded', () => {
       lastState = 'IDLE';
       lastViewAngle = null;
       lastLaserTriggered = false;
+      lastUserAngle = 0;
+      lowSyncStartTime = 0;
       poseEngine.resetSmoothing();
       
       // Clean analytics accumulators
@@ -390,6 +481,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isLeft = confidenceL >= confidenceR;
 
         currentAngle = isLeft ? (angleL || angleR) : (angleR || angleL);
+        lastUserAngle = currentAngle;
         torsoIncline = calculateIncline(isLeft ? shoulderL : shoulderR, isLeft ? hipL : hipR);
         selectedVertex = isLeft ? kneeL : kneeR;
 
@@ -434,6 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isLeft = confidenceL >= confidenceR;
 
         currentAngle = isLeft ? (angleL || angleR) : (angleR || angleL);
+        lastUserAngle = currentAngle;
         selectedVertex = isLeft ? elbowL : elbowR;
 
         if (elbowL && elbowR) {
@@ -589,6 +682,7 @@ document.addEventListener('DOMContentLoaded', () => {
         writeLog(logLine);
       }
     } else {
+      lastUserAngle = 0;
       fsm = {
         currentState: stateMachine.currentState,
         repCount: stateMachine.repCount,
@@ -661,6 +755,8 @@ document.addEventListener('DOMContentLoaded', () => {
     trackingState = null;
     lastViewAngle = null;
     lastLaserTriggered = false;
+    lastUserAngle = 0;
+    lowSyncStartTime = 0;
     poseEngine.resetSmoothing();
     biomechanicsEngine.clearBarPath();
     calibrationEngine.reset();
@@ -720,6 +816,8 @@ document.addEventListener('DOMContentLoaded', () => {
     trackingState = null;
     lastViewAngle = null;
     lastLaserTriggered = false;
+    lastUserAngle = 0;
+    lowSyncStartTime = 0;
 
     updateFloatingHUD(0, 'STANDBY', false);
   };
