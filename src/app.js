@@ -3,7 +3,7 @@
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
  * BiomechanicsEngine, CalibrationEngine, GestureController, CadenceEngine,
  * StateMachine, Web Audio SoundEngine (with Spatial Panning & Depth Chimes),
- * Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal.
+ * Multilingual Web Speech VoiceCoach, and 3D Holographic HUDRenderer + SummaryModal + SettingsModal.
  */
 
 import { CameraManager } from './core/cameraManager.js';
@@ -16,9 +16,10 @@ import { GestureController } from './logic/gestureController.js';
 import { CadenceEngine } from './logic/cadenceEngine.js';
 import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
-import { VoiceCoach } from './logic/voiceCoach.js';
+import { VoiceCoach, PhraseKey } from './logic/voiceCoach.js';
 import { HUDRenderer } from './ui/hudRenderer.js';
 import { SummaryModal } from './ui/summaryModal.js';
+import { SettingsModal } from './ui/settingsModal.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -30,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const exerciseSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('exercise-select'));
   const toggleTelemetryBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('toggle-telemetry-btn'));
   const telemetryDrawerEl = /** @type {HTMLElement|null} */ (document.getElementById('telemetry-drawer'));
+  const settingsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('settings-btn'));
 
   // Spatial Floating HUD DOM elements
   const sessionTimerEl = document.getElementById('session-timer');
@@ -38,10 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const hudRepCountEl = document.getElementById('hud-rep-count');
   const hudStateDisplayEl = document.getElementById('hud-state-display');
 
-  // Summary Modal DOM root
-  const modalEl = document.getElementById('summary-modal');
+  // Modal DOM roots
+  const summaryModalEl = document.getElementById('summary-modal');
+  const settingsModalEl = document.getElementById('settings-modal');
 
-  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer || !modalEl) {
+  if (!webcam || !canvas || !startBtn || !switchBtn || !stopBtn || !logContainer || !summaryModalEl || !settingsModalEl) {
     console.error('ApexForm AI: Failed to initialize application glue due to missing DOM nodes.');
     return;
   }
@@ -55,7 +58,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const soundEngine = new SoundEngine();
   const voiceCoach = new VoiceCoach();
   const hudRenderer = new HUDRenderer(canvas);
-  const summaryModal = new SummaryModal(modalEl);
+  const summaryModal = new SummaryModal(summaryModalEl);
+  const settingsModal = new SettingsModal(settingsModalEl, voiceCoach);
+
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', () => {
+      settingsModal.toggle();
+    });
+  }
 
   /** @type {number|null} */
   let frameRequestIdx = null;
@@ -286,10 +296,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // Announce viewpoint transition
       if (calibrationResult.viewAngle !== lastViewAngle && isTrackingActive) {
         if (calibrationResult.viewAngle === ViewAngle.SAGITTAL_VIEW) {
-          voiceCoach.speak('Side view detected, tracking squat depth.');
+          voiceCoach.speakPhrase(PhraseKey.SIDE_VIEW);
           writeLog('📷 [Viewpoint] Sagittal (Side Profile) detected: Depth Optimized.');
         } else {
-          voiceCoach.speak('Front view detected, tracking symmetry.');
+          voiceCoach.speakPhrase(PhraseKey.FRONT_VIEW);
           writeLog('📷 [Viewpoint] Frontal Profile detected: Symmetry & Valgus Optimized.');
         }
         lastViewAngle = calibrationResult.viewAngle;
@@ -298,9 +308,9 @@ document.addEventListener('DOMContentLoaded', () => {
       // Announce distance calibration guidance
       if (!calibrationResult.isCalibrated && isTrackingActive) {
         if (calibrationResult.calibrationMessage === 'STEP BACK SLIGHTLY') {
-          voiceCoach.speak('Step back slightly');
+          voiceCoach.speakPhrase(PhraseKey.STEP_BACK);
         } else if (calibrationResult.calibrationMessage === 'STEP CLOSER TO CAMERA') {
-          voiceCoach.speak('Step closer to camera');
+          voiceCoach.speakPhrase(PhraseKey.STEP_CLOSER);
         }
       }
 
@@ -309,13 +319,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (gestureResult.triggeredEvent === 'PAUSE' && !isTrackingPaused) {
         isTrackingPaused = true;
-        voiceCoach.speak('Workout paused');
+        voiceCoach.speakPhrase(PhraseKey.WORKOUT_PAUSED);
         writeLog('✋ [Gesture] Raised Arm detected: Workout Paused.');
         updateFloatingHUD(stateMachine.repCount, 'PAUSED', false);
       } else if (gestureResult.triggeredEvent === 'START_READY') {
         if (isTrackingPaused) {
           isTrackingPaused = false;
-          voiceCoach.speak('Workout resumed');
+          voiceCoach.speakPhrase(PhraseKey.WORKOUT_RESUMED);
           writeLog('▶️ [Gesture] Ready Stance detected: Workout Resumed.');
         } else if (!isTrackingActive) {
           writeLog('▶️ [Gesture] Ready Stance detected: Initiating Workout Session.');
@@ -323,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else if (gestureResult.triggeredEvent === 'STOP' && isTrackingActive) {
         writeLog('⏹️ [Gesture] Crossed Arms detected: Finishing Set.');
-        voiceCoach.speak('Workout completed');
+        voiceCoach.speakPhrase(PhraseKey.SET_COMPLETE);
         stopBtn.click();
         return;
       }
@@ -462,7 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
         cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
 
         if (cadenceResult.isRushed && fsm.currentState === 'IN_PROGRESS' && !currentRepHasFault) {
-          voiceCoach.speak('Control your descent');
+          voiceCoach.speakPhrase(PhraseKey.CONTROL_DESCENT);
         }
 
         // Track peak angles and fault flags during active repetition phases
@@ -478,7 +488,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           // Voice cue for Knee Valgus during squat ascent
           if (valgusResult && valgusResult.hasValgus) {
-            voiceCoach.speak('Drive knees outward');
+            voiceCoach.speakPhrase(PhraseKey.KNEES_OUT);
           }
         }
 
@@ -490,12 +500,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (initiatedRep) {
           if (activeExercise === 'SQUAT' && currentAngle > 150) {
             if (fsm.repCount === lastRepCount && !fsm.hasFault) {
-              voiceCoach.speak('Go lower');
+              voiceCoach.speakPhrase(PhraseKey.GO_LOWER);
             }
             initiatedRep = false;
           } else if (activeExercise === 'BICEP_CURL' && currentAngle > 145) {
             if (fsm.repCount === lastRepCount && !fsm.hasFault) {
-              voiceCoach.speak('Go higher');
+              voiceCoach.speakPhrase(PhraseKey.GO_HIGHER);
             }
             initiatedRep = false;
           }
@@ -503,13 +513,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Fatigue prediction alert
         if (fsm.isFatigued && fsm.currentState === 'IN_PROGRESS') {
-          voiceCoach.speak('Drive up');
+          voiceCoach.speakPhrase(PhraseKey.DRIVE_UP);
         }
 
         // 5. Rep Completion: archive metrics & triggers
         if (fsm.repCount > lastRepCount) {
           soundEngine.playSuccessChime();
-          voiceCoach.speak('Rep complete.');
+          voiceCoach.speakPhrase(PhraseKey.REP_SUCCESS);
 
           completedReps.push({
             repNum: fsm.repCount,
@@ -542,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
           soundEngine.playFaultTone();
           if (activeExercise === 'SQUAT') {
-            voiceCoach.speak('Chest up');
+            voiceCoach.speakPhrase(PhraseKey.CHEST_UP);
           }
         }
         lastState = fsm.currentState;
@@ -726,7 +736,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   startBtn.addEventListener('click', async () => {
     soundEngine.unlockContext();
-    voiceCoach.speak('Workout started');
+    voiceCoach.speakPhrase(PhraseKey.WORKOUT_STARTED);
     
     writeLog('Acquiring camera optical feed...');
     startBtn.disabled = true;
@@ -779,7 +789,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   stopBtn.addEventListener('click', () => {
     writeLog('Terminating optical stream...');
-    voiceCoach.speak('Workout completed');
+    voiceCoach.speakPhrase(PhraseKey.SET_COMPLETE);
     
     // Evaluate advanced set analytics
     const totalRepsCount = completedReps.length;

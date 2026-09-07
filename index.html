@@ -53,6 +53,7 @@
         <div class="hud-topbar__right">
           <div id="exercise-badge" class="hud-exercise-pill">SQUAT</div>
           <div id="hud-status-badge" class="hud-status-pill hud-status-pill--standby">STANDBY</div>
+          <button id="settings-btn" class="cyber-btn cyber-btn--ghost hud-icon-btn" title="Audio & Voice Settings">⚙️</button>
         </div>
       </header>
 
@@ -150,6 +151,53 @@
       </div>
 
       <button id="modal-close-btn" class="cyber-btn cyber-btn--primary modal__close-btn">SAVE & ARCHIVE</button>
+    </div>
+  </div>
+
+  <!-- Glassmorphic Audio & Language Settings Drawer -->
+  <div id="settings-modal" class="modal">
+    <div class="modal__content settings-drawer__content">
+      <div class="modal__glow-sphere"></div>
+      <h2 class="modal__title">AUDIO & VOICE SETTINGS</h2>
+
+      <div class="settings-group">
+        <label class="settings-label" for="settings-lang-select">COACHING LANGUAGE</label>
+        <div class="select-cyber-wrap">
+          <select id="settings-lang-select" class="cyber-select settings-select"></select>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-slider-header">
+          <label class="settings-label" for="settings-volume-slider">MASTER VOLUME</label>
+          <span id="settings-volume-val" class="settings-val">100%</span>
+        </div>
+        <input id="settings-volume-slider" type="range" class="cyber-slider" min="0" max="1" step="0.05" value="1">
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-slider-header">
+          <label class="settings-label" for="settings-rate-slider">SPEECH TEMPO (SPEED)</label>
+          <span id="settings-rate-val" class="settings-val">1.05x</span>
+        </div>
+        <input id="settings-rate-slider" type="range" class="cyber-slider" min="0.8" max="1.5" step="0.05" value="1.05">
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-slider-header">
+          <label class="settings-label" for="settings-pitch-slider">VOICE PITCH</label>
+          <span id="settings-pitch-val" class="settings-val">1.00x</span>
+        </div>
+        <input id="settings-pitch-slider" type="range" class="cyber-slider" min="0.7" max="1.4" step="0.05" value="1.0">
+      </div>
+
+      <div class="settings-actions">
+        <button id="settings-test-btn" class="cyber-btn cyber-btn--secondary">
+          <span class="cyber-btn__icon">🔊</span>
+          <span class="cyber-btn__text">Test Voice</span>
+        </button>
+        <button id="settings-close-btn" class="cyber-btn cyber-btn--primary">Save & Done</button>
+      </div>
     </div>
   </div>
 
