@@ -3,7 +3,7 @@
  * Connects WebRTC CameraManager, MediaPipe PoseEngine, Biomechanical MathEngine,
  * BiomechanicsEngine, CalibrationEngine, GestureController, CadenceEngine,
  * StateMachine, Web Audio SoundEngine (with Spatial Panning & Depth Chimes),
- * Multilingual Web Speech VoiceCoach, AI Robotic Virtual Trainer,
+ * Multilingual Web Speech VoiceCoach, AI Robotic Virtual Trainer, AR Rhythm Game Engine,
  * and 3D Holographic HUDRenderer + SummaryModal + SettingsModal.
  */
 
@@ -19,6 +19,7 @@ import { StateMachine } from './logic/stateMachine.js';
 import { SoundEngine } from './logic/soundEngine.js';
 import { VoiceCoach, PhraseKey } from './logic/voiceCoach.js';
 import { RobotTrainer } from './ui/robotTrainer.js';
+import { RhythmGame } from './ui/rhythmGame.js';
 import { HUDRenderer } from './ui/hudRenderer.js';
 import { SummaryModal } from './ui/summaryModal.js';
 import { SettingsModal } from './ui/settingsModal.js';
@@ -34,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const toggleTelemetryBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('toggle-telemetry-btn'));
   const telemetryDrawerEl = /** @type {HTMLElement|null} */ (document.getElementById('telemetry-drawer'));
   const settingsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('settings-btn'));
+  const toggleGameBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('toggle-game-btn'));
 
   // AI Robotic Trainer DOM Elements
   const robotTrainerCardEl = document.getElementById('robot-trainer-card');
@@ -68,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const cadenceEngine = new CadenceEngine();
   const soundEngine = new SoundEngine();
   const voiceCoach = new VoiceCoach();
+  const rhythmGame = new RhythmGame();
   const hudRenderer = new HUDRenderer(canvas);
   const summaryModal = new SummaryModal(summaryModalEl);
   const settingsModal = new SettingsModal(settingsModalEl, voiceCoach);
@@ -80,6 +83,15 @@ document.addEventListener('DOMContentLoaded', () => {
   let isTrainerActive = true;
   let lastUserAngle = 0;
   let lowSyncStartTime = 0;
+
+  // Toggle AR Rhythm Game Mode
+  if (toggleGameBtn) {
+    toggleGameBtn.addEventListener('click', () => {
+      const active = rhythmGame.toggle();
+      toggleGameBtn.classList.toggle('cyber-btn--game-active', active);
+      writeLog(active ? '🎮 AR Kinetic Rhythm Game Activated! Hit depth target orbs.' : '🎮 AR Rhythm Game Deactivated.');
+    });
+  }
 
   // Toggle AI Trainer PiP window
   const toggleTrainer = () => {
@@ -129,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
             lowSyncStartTime = timestamp;
           } else if (timestamp - lowSyncStartTime > 3000) {
             voiceCoach.speakPhrase(PhraseKey.MATCH_TRAINER_PACE);
-            lowSyncStartTime = timestamp; // Reset after cue
+            lowSyncStartTime = timestamp;
           }
         } else {
           lowSyncStartTime = 0;
@@ -282,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
     exerciseSelect.addEventListener('change', () => {
       activeExercise = exerciseSelect.value;
       robotTrainer.setExercise(activeExercise);
+      rhythmGame.reset();
       if (exerciseBadgeEl) {
         exerciseBadgeEl.textContent = activeExercise === 'SQUAT' ? 'SQUAT' : 'BICEP CURL';
       }
@@ -446,7 +459,8 @@ document.addEventListener('DOMContentLoaded', () => {
           cadence: null,
           calibration: calibrationResult,
           laserDepth: null,
-          rirData: null
+          rirData: null,
+          rhythmGame: null
         });
         return;
       }
@@ -485,10 +499,31 @@ document.addEventListener('DOMContentLoaded', () => {
         torsoIncline = calculateIncline(isLeft ? shoulderL : shoulderR, isLeft ? hipL : hipR);
         selectedVertex = isLeft ? kneeL : kneeR;
 
-        // Laser Tripwire target depth calculation
+        // Laser Tripwire & Rhythm Game Target calculations
         if (kneeL && kneeR) {
           targetDepthY = Math.max(kneeL.y, kneeR.y) * 480;
           isLaserTriggered = currentAngle <= 90 && currentAngle > 0;
+
+          // AR Motion-Target Rhythm Game Collision Check
+          if (rhythmGame.isEnabled) {
+            const targetDepthX = ((kneeL.x + kneeR.x) / 2) * 640;
+            rhythmGame.spawnTarget(targetDepthX, targetDepthY, 'SQUAT');
+
+            const testJoint = selectedVertex || kneeL;
+            const hitResult = rhythmGame.checkCollision(testJoint.x * 640, testJoint.y * 480, 36);
+
+            if (hitResult.hit) {
+              soundEngine.playTargetShatterSound();
+              if (hitResult.comboStreak === 5 || hitResult.comboStreak === 10 || hitResult.comboStreak === 20) {
+                soundEngine.playStreakSound(hitResult.multiplier);
+              }
+              writeLog(`💥 [SHATTER] Depth Target Hit! Combo: ${hitResult.comboStreak}x (+${100 * hitResult.multiplier} pts)`);
+            }
+
+            if (currentAngle > 150) {
+              rhythmGame.armTarget();
+            }
+          }
         }
 
         // Frontal-Plane Knee Valgus Calculation
@@ -532,6 +567,27 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elbowL && elbowR) {
           targetDepthY = Math.max(elbowL.y, elbowR.y) * 480;
           isLaserTriggered = currentAngle <= 50 && currentAngle > 0;
+
+          if (rhythmGame.isEnabled) {
+            const targetDepthX = (isLeft ? elbowL.x : elbowR.x) * 640;
+            rhythmGame.spawnTarget(targetDepthX, targetDepthY, 'BICEP_CURL');
+
+            const testWrist = isLeft ? wristL : wristR;
+            if (testWrist) {
+              const hitResult = rhythmGame.checkCollision(testWrist.x * 640, testWrist.y * 480, 36);
+              if (hitResult.hit) {
+                soundEngine.playTargetShatterSound();
+                if (hitResult.comboStreak === 5 || hitResult.comboStreak === 10 || hitResult.comboStreak === 20) {
+                  soundEngine.playStreakSound(hitResult.multiplier);
+                }
+                writeLog(`💥 [SHATTER] Peak Curl Target Hit! Combo: ${hitResult.comboStreak}x (+${100 * hitResult.multiplier} pts)`);
+              }
+            }
+
+            if (currentAngle > 140) {
+              rhythmGame.armTarget();
+            }
+          }
         }
       }
 
@@ -587,6 +643,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (fsm.hasFault) {
           currentRepHasFault = true;
+          rhythmGame.breakCombo();
         }
 
         // Voice coaching triggers for partial range of motion
@@ -670,7 +727,9 @@ document.addEventListener('DOMContentLoaded', () => {
         lastTelemetryTime = now;
         const displayAngle = Math.round(currentAngle);
         let logLine = `Reps: ${fsm.repCount} | State: ${fsm.currentState} | Angle: ${displayAngle}°`;
-        if (fsm.rirEstimate) {
+        if (rhythmGame.isEnabled && rhythmGame.comboStreak > 0) {
+          logLine += ` | Game: ${rhythmGame.comboStreak}x [Score: ${rhythmGame.score}]`;
+        } else if (fsm.rirEstimate) {
           logLine += ` | RIR: ${fsm.rirEstimate}`;
         }
         if (symmetry) {
@@ -700,7 +759,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 7. Update Spatial HTML Floating Badges
     updateFloatingHUD(fsm.repCount, fsm.currentState, fsm.hasFault);
 
-    // 8. Render 3D Holographic Skeletal Canvas with AR Laser & RIR Gauge at 60 FPS
+    // 8. Render 3D Holographic Skeletal Canvas with AR Laser & RIR Gauge & Rhythm Game at 60 FPS
     hudRenderer.render({
       landmarks: hasPose ? landmarks : [],
       activeAngle: currentAngle,
@@ -716,7 +775,8 @@ document.addEventListener('DOMContentLoaded', () => {
       cadence: cadenceResult,
       calibration: calibrationResult,
       laserDepth: { targetY: targetDepthY, isTriggered: isLaserTriggered },
-      rirData: { rirEstimate: fsm.rirEstimate, velocityLossPercent: fsm.velocityLossPercent }
+      rirData: { rirEstimate: fsm.rirEstimate, velocityLossPercent: fsm.velocityLossPercent },
+      rhythmGame: rhythmGame.isEnabled ? rhythmGame : null
     });
   });
 
@@ -762,6 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
     calibrationEngine.reset();
     gestureController.reset();
     cadenceEngine.reset();
+    rhythmGame.reset();
     
     // Reset state parameters
     stateMachine.reset();

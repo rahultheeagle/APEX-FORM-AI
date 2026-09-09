@@ -552,6 +552,13 @@ html, body.viewport-app {
   color: #ffffff;
 }
 
+.cyber-btn--game-active {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.3) 0%, rgba(0, 242, 254, 0.3) 100%) !important;
+  border-color: #a855f7 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.5) !important;
+}
+
 .cyber-btn:disabled {
   background: rgba(30, 41, 59, 0.4);
   border-color: rgba(255, 255, 255, 0.05);

@@ -239,12 +239,69 @@ export class HUDRenderer {
       this._renderRIRBadge(rirData, width, height);
     }
 
-    // 14. Laser Crimson Fault Warning Banner
+    // 14. AR Kinetic Rhythm Target Orbs & Particles
+    if (rhythmGame && rhythmGame.isEnabled) {
+      rhythmGame.render(this.ctx, width, height, now);
+      if (rhythmGame.comboStreak > 0) {
+        this._renderComboBadge(rhythmGame.comboStreak, rhythmGame.getMultiplier(), rhythmGame.getComboTierLabel(), width, height, now);
+      }
+    }
+
+    // 15. Laser Crimson Fault Warning Banner
     if (hasFault && faultMessage) {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
     this.ctx.restore();
+  }
+
+  /**
+   * Renders high-energy streak & multiplier badge on the upper canvas.
+   * 
+   * @param {number} comboStreak
+   * @param {number} multiplier
+   * @param {string} tierLabel
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderComboBadge(comboStreak, multiplier, tierLabel, width, height, now) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const text = `STREAK: ${comboStreak}x [${tierLabel}]`;
+    const isOverdrive = comboStreak >= 10;
+    const badgeColor = comboStreak >= 20 ? HOLO_COLORS.MAGENTA : isOverdrive ? HOLO_COLORS.MINT : HOLO_COLORS.CYAN;
+
+    const badgeW = 230;
+    const badgeH = 24;
+    // Positioned in top-left canvas space -> appears top-right on mirrored screen
+    const x = 20;
+    const y = 114;
+
+    const pulse = Math.sin(now / 120) * 0.15 + 0.85;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.strokeStyle = badgeColor;
+    ctx.lineWidth = 1.6;
+    ctx.shadowBlur = 12 * pulse;
+    ctx.shadowColor = badgeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      text,
+      x + (badgeW / 2),
+      y + (badgeH / 2),
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      badgeColor,
+      'center'
+    );
+
+    ctx.restore();
   }
 
   /**

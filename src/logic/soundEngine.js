@@ -199,4 +199,98 @@ export class SoundEngine {
     osc.start(now);
     osc.stop(now + 0.3);
   }
+
+  /**
+   * Synthesizes an explosive high-pass filtered cyber chime on successful target contact.
+   */
+  playTargetShatterSound() {
+    this.unlockContext();
+    if (!this.audioContext) return;
+
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+
+    // 1. Crystalline High Chime
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1760, now); // A6
+    osc.frequency.exponentialRampToValueAtTime(2640, now + 0.08);
+
+    gain.gain.setValueAtTime(0.0, now);
+    gain.gain.linearRampToValueAtTime(0.2, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.25);
+
+    // 2. High-Pass Filtered Spark Noise Burst
+    const bufferSize = ctx.sampleRate * 0.12;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(2400, now);
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.14, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    noise.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+
+    noise.start(now);
+    noise.stop(now + 0.13);
+  }
+
+  /**
+   * Synthesizes an ascending pitch sweep as combo streaks hit 5x, 10x, and 20x.
+   * 
+   * @param {number} [comboMultiplier=2]
+   */
+  playStreakSound(comboMultiplier = 2) {
+    this.unlockContext();
+    if (!this.audioContext) return;
+
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+
+    const notes = comboMultiplier >= 4
+      ? [523.25, 659.25, 783.99, 1046.50, 1318.51] // C5, E5, G5, C6, E6
+      : comboMultiplier >= 3
+      ? [523.25, 659.25, 783.99, 1046.50]         // C5, E5, G5, C6
+      : [523.25, 659.25, 783.99];                 // C5, E5, G5
+
+    const stepDuration = 0.055;
+
+    notes.forEach((freq, idx) => {
+      const startT = now + (idx * stepDuration);
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, startT);
+
+      gain.gain.setValueAtTime(0.0, startT);
+      gain.gain.linearRampToValueAtTime(0.12, startT + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, startT + stepDuration + 0.08);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(startT);
+      osc.stop(startT + stepDuration + 0.1);
+    });
+  }
 }
