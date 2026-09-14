@@ -111,9 +111,11 @@ export class CalibrationEngine {
 
     this.bounds = { minX, minY, maxX, maxY };
 
-    // 3. Distance Calibration: Nose-to-ankle height span
+    // 3. Distance Calibration: Nose-to-ankle span (vertical or horizontal prone)
     const lowestAnkleY = Math.max(ankleL.y, ankleR.y);
+    const avgAnkleX = (ankleL.x + ankleR.x) / 2;
     const bodyHeightSpan = Math.abs(lowestAnkleY - nose.y);
+    const bodyTotalSpan = Math.max(bodyHeightSpan, Math.hypot(avgAnkleX - nose.x, lowestAnkleY - nose.y));
 
     let frameValid = true;
     let message = 'CALIBRATING POSITION...';
@@ -121,10 +123,10 @@ export class CalibrationEngine {
     if (anyLowVisibility || anyClipped) {
       frameValid = false;
       message = 'STEP INTO FULL VIEW';
-    } else if (bodyHeightSpan < 0.55) {
+    } else if (bodyTotalSpan < 0.50) {
       frameValid = false;
       message = 'STEP CLOSER TO CAMERA';
-    } else if (bodyHeightSpan > 0.85) {
+    } else if (bodyTotalSpan > 0.95) {
       frameValid = false;
       message = 'STEP BACK SLIGHTLY';
     }

@@ -47,4 +47,24 @@ export const EXERCISE_RULES = Object.freeze({
       contractionMax: 45,
     }),
   }),
+  PUSHUP: Object.freeze({
+    name: 'Pushup',
+    joints: Object.freeze({
+      shoulderLeft: 11,
+      shoulderRight: 12,
+      elbowLeft: 13,
+      elbowRight: 14,
+      wristLeft: 15,
+      wristRight: 16,
+      hipLeft: 23,
+      hipRight: 24,
+      ankleLeft: 27,
+      ankleRight: 28,
+    }),
+    thresholds: Object.freeze({
+      extensionMin: 155,
+      depthMax: 90,
+      maxTorsoIncline: 45,
+    }),
+  }),
 });

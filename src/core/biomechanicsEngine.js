@@ -207,11 +207,15 @@ export class BiomechanicsEngine {
    * @returns {{ joules: number, kcal: number }}
    */
   calculateMechanicalWork(totalReps, exerciseKey, userBodyweightKg = 75) {
-    // Work = Force * Distance = (mass * g) * displacement * reps
-    // Squat: moves ~70% of body mass through ~0.55m vertical displacement per rep
-    // Curl: moves ~15% of body mass (arms/weights) through ~0.40m displacement
-    const effectiveMassKg = exerciseKey === 'SQUAT' ? (userBodyweightKg * 0.70) : (userBodyweightKg * 0.15);
-    const displacementM = exerciseKey === 'SQUAT' ? 0.55 : 0.40;
+    let effectiveMassKg = userBodyweightKg * 0.70;
+    let displacementM = 0.55;
+    if (exerciseKey === 'PUSHUP') {
+      effectiveMassKg = userBodyweightKg * 0.64;
+      displacementM = 0.45;
+    } else if (exerciseKey === 'BICEP_CURL') {
+      effectiveMassKg = userBodyweightKg * 0.15;
+      displacementM = 0.40;
+    }
     const g = 9.81;
 
     const joulesPerRep = effectiveMassKg * g * displacementM * 2; // concentric + eccentric
@@ -228,5 +232,84 @@ export class BiomechanicsEngine {
     this.barPath = [];
     this.lastSampleTime = 0;
     this.lastPositionY = 0;
+  }
+
+  /**
+   * Computes weighted center-of-mass (CoM) centroid:
+   * Hips (40%), Shoulders (40%), and Head (20%).
+   * 
+   * @param {Array<{ x: number, y: number, z: number }>} landmarks
+   * @returns {{ x: number, y: number, z: number }|null}
+   */
+  calculateCenterOfMass(landmarks) {
+    if (!landmarks || landmarks.length < 25) return null;
+
+    const sL = landmarks[11];
+    const sR = landmarks[12];
+    const hL = landmarks[23];
+    const hR = landmarks[24];
+    const nose = landmarks[0];
+
+    if (!sL || !sR || !hL || !hR) return null;
+
+    const midShoulder = {
+      x: (sL.x + sR.x) / 2,
+      y: (sL.y + sR.y) / 2,
+      z: ((sL.z || 0) + (sR.z || 0)) / 2
+    };
+
+    const midHip = {
+      x: (hL.x + hR.x) / 2,
+      y: (hL.y + hR.y) / 2,
+      z: ((hL.z || 0) + (hR.z || 0)) / 2
+    };
+
+    const head = nose ? {
+      x: nose.x,
+      y: nose.y,
+      z: nose.z || 0
+    } : midShoulder;
+
+    // Weighted centroid: 40% hips, 40% shoulders, 20% head
+    const comX = midHip.x * 0.4 + midShoulder.x * 0.4 + head.x * 0.2;
+    const comY = midHip.y * 0.4 + midShoulder.y * 0.4 + head.y * 0.2;
+    const comZ = midHip.z * 0.4 + midShoulder.z * 0.4 + head.z * 0.2;
+
+    return { x: comX, y: comY, z: comZ };
+  }
+
+  /**
+   * Computes concentric mechanical power output in Watts.
+   * P = (m * g * verticalDisplacementY) / timeDeltaSec
+   * 
+   * @param {number} verticalDisplacementY Normalized vertical displacement (0.0 - 1.0) or meters.
+   * @param {number} timeDeltaSec Duration of the concentric phase in seconds.
+   * @param {number} [userMassKg=70]
+   * @returns {{ watts: number, rating: 'EXPLOSIVE'|'POWERFUL'|'MODERATE'|'FATIGUED' }}
+   */
+  calculateConcentricPower(verticalDisplacementY, timeDeltaSec, userMassKg = 70) {
+    if (timeDeltaSec <= 0.05 || verticalDisplacementY <= 0) {
+      return { watts: 0, rating: 'MODERATE' };
+    }
+
+    // Convert normalized displacement (~0.25 normalized ≈ 0.5m displacement)
+    const displacementMeters = verticalDisplacementY > 1.0 ? verticalDisplacementY : verticalDisplacementY * 1.8;
+    const g = 9.81;
+
+    // Power (Watts) = Work / Time = (mass * g * height) / time
+    const powerWatts = Math.round((userMassKg * g * displacementMeters) / timeDeltaSec);
+
+    let rating = 'MODERATE';
+    if (powerWatts >= 500) {
+      rating = 'EXPLOSIVE';
+    } else if (powerWatts >= 350) {
+      rating = 'POWERFUL';
+    } else if (powerWatts >= 200) {
+      rating = 'MODERATE';
+    } else {
+      rating = 'FATIGUED';
+    }
+
+    return { watts: powerWatts, rating };
   }
 }

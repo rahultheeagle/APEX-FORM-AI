@@ -256,6 +256,57 @@ export class StateMachine {
         default:
           break;
       }
+    } else if (exerciseKey === 'PUSHUP') {
+      const config = EXERCISE_RULES.PUSHUP;
+
+      switch (this.currentState) {
+        case State.IDLE:
+          if (currentAngle >= config.thresholds.extensionMin) {
+            this.currentState = State.SETUP;
+            this.midpointAchieved = false;
+            this.eccentricStartTime = 0;
+          }
+          break;
+
+        case State.SETUP:
+          if (currentAngle < 150 && !this.eccentricStartTime) {
+            this.eccentricStartTime = now;
+            this.peakDepthAngle = currentAngle;
+          }
+          if (this.eccentricStartTime) {
+            this.peakDepthAngle = Math.min(this.peakDepthAngle, currentAngle);
+          }
+
+          if (currentAngle <= config.thresholds.depthMax) {
+            this.currentState = State.IN_PROGRESS;
+            this.midpointAchieved = true;
+            if (this.eccentricStartTime) {
+              this.lastEccentricDuration = Number(((now - this.eccentricStartTime) / 1000).toFixed(2));
+            }
+            this.concentricStartTime = now;
+          }
+          break;
+
+        case State.IN_PROGRESS:
+          this.peakDepthAngle = Math.min(this.peakDepthAngle, currentAngle);
+
+          if (currentAngle >= config.thresholds.extensionMin) {
+            if (this.midpointAchieved) {
+              this._recordRepCompletion(now, currentAngle);
+            } else {
+              this.currentState = State.SETUP;
+              this.eccentricStartTime = 0;
+            }
+          }
+          break;
+
+        case State.VALIDATED_SUCCESS:
+          this.currentState = State.SETUP;
+          break;
+
+        default:
+          break;
+      }
     }
 
     return this._getStatePayload();

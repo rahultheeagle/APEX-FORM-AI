@@ -163,7 +163,16 @@ export class HUDRenderer {
     faultMessage,
     barPath = [],
     symmetry = null,
-    valgusResult = null
+    valgusResult = null,
+    gesture = null,
+    cadence = null,
+    calibration = null,
+    laserDepth = null,
+    rirData = null,
+    rhythmGame = null,
+    centerOfMass = null,
+    powerTelemetry = null,
+    exerciseBanner = null
   }) {
     this.clear();
 
@@ -247,12 +256,197 @@ export class HUDRenderer {
       }
     }
 
-    // 15. Laser Crimson Fault Warning Banner
+    // 15. Center-of-Mass AR Plumb Line & Floor Balance Ring
+    if (centerOfMass && landmarks && landmarks.length >= 25) {
+      this._renderCenterOfMassPlumbLine(centerOfMass, landmarks, width, height);
+    }
+
+    // 16. Concentric Mechanical Power Meter (Watts)
+    if (powerTelemetry && powerTelemetry.watts > 0) {
+      this._renderPowerMeter(powerTelemetry, width, height);
+    }
+
+    // 17. Dynamic Exercise Mode Switch Banner
+    if (exerciseBanner && now - exerciseBanner.timestamp < 2500) {
+      this._renderExerciseBanner(exerciseBanner, width, height, now);
+    }
+
+    // 18. Laser Crimson Fault Warning Banner
     if (hasFault && faultMessage) {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
     this.ctx.restore();
+  }
+
+  /**
+   * Draws a vertical laser plumb line from CoM down to the floor plane with dynamic balance ring.
+   * 
+   * @param {{ x: number, y: number, z: number }} com
+   * @param {Array<any>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderCenterOfMassPlumbLine(com, landmarks, width, height) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const cx = com.x * width;
+    const cy = com.y * height;
+
+    const ankleL = landmarks[27];
+    const ankleR = landmarks[28];
+    const floorY = Math.max(ankleL ? ankleL.y : 0.88, ankleR ? ankleR.y : 0.88) * height + 10;
+
+    // Check base of support between feet
+    const aLx = ankleL ? ankleL.x * width : cx - 30;
+    const aRx = ankleR ? ankleR.x * width : cx + 30;
+    const minFootX = Math.min(aLx, aRx) - 25;
+    const maxFootX = Math.max(aLx, aRx) + 25;
+
+    const isBalanced = cx >= minFootX && cx <= maxFootX;
+    const color = isBalanced ? HOLO_COLORS.MINT : HOLO_COLORS.CRIMSON;
+
+    // Plumb line (dashed laser)
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx, floorY);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([5, 4]);
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = color;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // CoM Center Node
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = color;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    // Floor Balance Projection Ring
+    ctx.beginPath();
+    ctx.ellipse(cx, floorY, 32, 10, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.0;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = color;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, floorY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    this._drawUnmirroredText(
+      isBalanced ? 'COM: STABLE' : 'COM: OFF-BALANCE',
+      cx,
+      floorY + 16,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders mechanical power output telemetry in Watts on the HUD.
+   * 
+   * @param {{ watts: number, rating: string }} powerTelemetry
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderPowerMeter(powerTelemetry, width, height) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const { watts, rating } = powerTelemetry;
+    let color = HOLO_COLORS.CYAN;
+    if (rating === 'EXPLOSIVE') color = HOLO_COLORS.MAGENTA;
+    else if (rating === 'POWERFUL') color = HOLO_COLORS.MINT;
+    else if (rating === 'FATIGUED') color = HOLO_COLORS.AMBER;
+
+    const badgeW = 210;
+    const badgeH = 22;
+    const x = 20;
+    const y = 142;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.3;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = color;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      `OUTPUT: ${watts}W [${rating}]`,
+      x + (badgeW / 2),
+      y + (badgeH / 2),
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders an animated cyber banner when an exercise auto-switch is triggered.
+   * 
+   * @param {{ exerciseKey: string, timestamp: number }} banner
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderExerciseBanner(banner, width, height, now) {
+    const ctx = this.ctx;
+    const elapsed = now - banner.timestamp;
+    const alpha = Math.max(0, Math.min(1, 1 - (elapsed - 1500) / 1000));
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    const bannerW = 260;
+    const bannerH = 32;
+    const x = (width - bannerW) / 2;
+    const y = 70;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.strokeStyle = HOLO_COLORS.CYAN;
+    ctx.lineWidth = 1.8;
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = HOLO_COLORS.CYAN;
+
+    this._drawRoundedRect(ctx, x, y, bannerW, bannerH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      `⚡ AUTO-DETECT: ${banner.exerciseKey}`,
+      x + (bannerW / 2),
+      y + (bannerH / 2),
+      'bold 9.5px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.MINT,
+      'center'
+    );
+
+    ctx.restore();
   }
 
   /**
@@ -1082,7 +1276,8 @@ export class HUDRenderer {
 
       const isSquatJoint = exerciseKey === 'SQUAT' && [23, 24, 25, 26, 27, 28].includes(idx);
       const isCurlJoint = exerciseKey === 'BICEP_CURL' && [11, 12, 13, 14, 15, 16].includes(idx);
-      const isTargetJoint = isSquatJoint || isCurlJoint;
+      const isPushupJoint = exerciseKey === 'PUSHUP' && [11, 12, 13, 14, 15, 16].includes(idx);
+      const isTargetJoint = isSquatJoint || isCurlJoint || isPushupJoint;
       const nodeColor = isTargetJoint ? theme.solid : HOLO_COLORS.CYAN;
 
       ctx.save();
@@ -1139,7 +1334,7 @@ export class HUDRenderer {
       pA = landmarks[isLeft ? 23 : 24]; // Hip
       pB = landmarks[isLeft ? 25 : 26]; // Knee (Vertex)
       pC = landmarks[isLeft ? 27 : 28]; // Ankle
-    } else if (exerciseKey === 'BICEP_CURL') {
+    } else if (exerciseKey === 'BICEP_CURL' || exerciseKey === 'PUSHUP') {
       const leftConf = landmarks[13] ? landmarks[13].visibility : 0;
       const rightConf = landmarks[14] ? landmarks[14].visibility : 0;
       const isLeft = leftConf >= rightConf;
@@ -1336,9 +1531,9 @@ export class HUDRenderer {
       const squatJoints = [23, 24, 25, 26, 27, 28];
       return squatJoints.includes(p1) && squatJoints.includes(p2);
     }
-    if (exerciseKey === 'BICEP_CURL') {
-      const curlJoints = [11, 12, 13, 14, 15, 16];
-      return curlJoints.includes(p1) && curlJoints.includes(p2);
+    if (exerciseKey === 'BICEP_CURL' || exerciseKey === 'PUSHUP') {
+      const armJoints = [11, 12, 13, 14, 15, 16];
+      return armJoints.includes(p1) && armJoints.includes(p2);
     }
     return false;
   }

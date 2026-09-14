@@ -21,6 +21,7 @@ import { VoiceCoach, PhraseKey } from './logic/voiceCoach.js';
 import { RobotTrainer } from './ui/robotTrainer.js';
 import { RhythmGame } from './ui/rhythmGame.js';
 import { HUDRenderer } from './ui/hudRenderer.js';
+import { ExerciseClassifier } from './logic/exerciseClassifier.js';
 import { SummaryModal } from './ui/summaryModal.js';
 import { SettingsModal } from './ui/settingsModal.js';
 
@@ -74,6 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const hudRenderer = new HUDRenderer(canvas);
   const summaryModal = new SummaryModal(summaryModalEl);
   const settingsModal = new SettingsModal(settingsModalEl, voiceCoach);
+  const exerciseClassifier = new ExerciseClassifier();
 
   /** @type {string} */
   let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
@@ -83,6 +85,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let isTrainerActive = true;
   let lastUserAngle = 0;
   let lowSyncStartTime = 0;
+  let powerTelemetry = { watts: 0, rating: 'MODERATE' };
+  let exerciseBanner = null;
+  let repMidpointCoMY = 0;
 
   // Toggle AR Rhythm Game Mode
   if (toggleGameBtn) {
@@ -290,45 +295,59 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  const switchExercise = (newExercise, isAuto = false) => {
+    if (activeExercise === newExercise) return;
+    activeExercise = newExercise;
+    if (exerciseSelect) {
+      exerciseSelect.value = activeExercise;
+    }
+    robotTrainer.setExercise(activeExercise);
+    rhythmGame.reset();
+    if (exerciseBadgeEl) {
+      exerciseBadgeEl.textContent = activeExercise === 'SQUAT' ? 'SQUAT' : (activeExercise === 'PUSHUP' ? 'PUSHUP' : 'BICEP CURL');
+    }
+    if (isAuto) {
+      exerciseBanner = { exerciseKey: activeExercise, timestamp: performance.now() };
+      writeLog(`⚡ [AUTO-DETECT] Exercise dynamically switched to: ${activeExercise}`);
+    } else {
+      writeLog(`Biomechanics target switched to: ${activeExercise}`);
+    }
+
+    // Reset state machine parameters
+    stateMachine.reset();
+    biomechanicsEngine.clearBarPath();
+    calibrationEngine.reset();
+    gestureController.reset();
+    cadenceEngine.reset();
+    isTrackingPaused = false;
+    lastRepCount = 0;
+    lastState = 'IDLE';
+    lastViewAngle = null;
+    lastLaserTriggered = false;
+    lastUserAngle = 0;
+    lowSyncStartTime = 0;
+    poseEngine.resetSmoothing();
+
+    // Clean analytics accumulators
+    completedReps = [];
+    repVelocities = [];
+    symmetrySamples = [];
+    fullSessionPath = [];
+    currentRepHasFault = false;
+    currentRepMinAngle = 180;
+    initiatedRep = false;
+    repMidpointCoMY = 0;
+
+    // Reset spatial HUD badges
+    updateFloatingHUD(0, 'STANDBY', false);
+
+    // Clear visual frame overlay
+    hudRenderer.clear();
+  };
+
   if (exerciseSelect) {
     exerciseSelect.addEventListener('change', () => {
-      activeExercise = exerciseSelect.value;
-      robotTrainer.setExercise(activeExercise);
-      rhythmGame.reset();
-      if (exerciseBadgeEl) {
-        exerciseBadgeEl.textContent = activeExercise === 'SQUAT' ? 'SQUAT' : 'BICEP CURL';
-      }
-      writeLog(`Biomechanics target switched to: ${activeExercise}`);
-      
-      // Reset state machine parameters
-      stateMachine.reset();
-      biomechanicsEngine.clearBarPath();
-      calibrationEngine.reset();
-      gestureController.reset();
-      cadenceEngine.reset();
-      isTrackingPaused = false;
-      lastRepCount = 0;
-      lastState = 'IDLE';
-      lastViewAngle = null;
-      lastLaserTriggered = false;
-      lastUserAngle = 0;
-      lowSyncStartTime = 0;
-      poseEngine.resetSmoothing();
-      
-      // Clean analytics accumulators
-      completedReps = [];
-      repVelocities = [];
-      symmetrySamples = [];
-      fullSessionPath = [];
-      currentRepHasFault = false;
-      currentRepMinAngle = 180;
-      initiatedRep = false;
-
-      // Reset spatial HUD badges
-      updateFloatingHUD(0, 'STANDBY', false);
-
-      // Clear visual frame overlay
-      hudRenderer.clear();
+      switchExercise(exerciseSelect.value, false);
     });
   }
 
@@ -379,6 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let calibrationResult = null;
     let targetDepthY = 0;
     let isLaserTriggered = false;
+    let centerOfMass = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -394,6 +414,16 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (hasPose) {
+      // 0. Dynamic Exercise Classification & Center-of-Mass Vector
+      if (isTrackingActive && !isTrackingPaused) {
+        const classification = exerciseClassifier.classifyPose(landmarks);
+        if (classification.hasChanged) {
+          switchExercise(classification.currentExercise, true);
+        }
+      }
+
+      centerOfMass = biomechanicsEngine.calculateCenterOfMass(landmarks);
+
       // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
       calibrationResult = calibrationEngine.evaluateFrame(landmarks);
 
@@ -460,7 +490,10 @@ document.addEventListener('DOMContentLoaded', () => {
           calibration: calibrationResult,
           laserDepth: null,
           rirData: null,
-          rhythmGame: null
+          rhythmGame: null,
+          centerOfMass,
+          powerTelemetry,
+          exerciseBanner
         });
         return;
       }
@@ -589,6 +622,57 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
         }
+      } else if (activeExercise === 'PUSHUP') {
+        const joints = EXERCISE_RULES.PUSHUP.joints;
+
+        const shoulderL = landmarks[joints.shoulderLeft];
+        const elbowL = landmarks[joints.elbowLeft];
+        const wristL = landmarks[joints.wristLeft];
+
+        const shoulderR = landmarks[joints.shoulderRight];
+        const elbowR = landmarks[joints.elbowRight];
+        const wristR = landmarks[joints.wristRight];
+
+        if (shoulderL && elbowL && wristL && shoulderL.visibility > 0.4 && elbowL.visibility > 0.4 && wristL.visibility > 0.4) {
+          angleL = calculate3DAngle(shoulderL, elbowL, wristL);
+        }
+        if (shoulderR && elbowR && wristR && shoulderR.visibility > 0.4 && elbowR.visibility > 0.4 && wristR.visibility > 0.4) {
+          angleR = calculate3DAngle(shoulderR, elbowR, wristR);
+        }
+
+        const confidenceL = getConfidenceScore(shoulderL, elbowL, wristL);
+        const confidenceR = getConfidenceScore(shoulderR, elbowR, wristR);
+        const isLeft = confidenceL >= confidenceR;
+
+        currentAngle = isLeft ? (angleL || angleR) : (angleR || angleL);
+        lastUserAngle = currentAngle;
+        selectedVertex = isLeft ? elbowL : elbowR;
+
+        if (elbowL && elbowR) {
+          targetDepthY = Math.max(elbowL.y, elbowR.y) * 480;
+          isLaserTriggered = currentAngle <= 90 && currentAngle > 0;
+
+          if (rhythmGame.isEnabled) {
+            const targetDepthX = (isLeft ? elbowL.x : elbowR.x) * 640;
+            rhythmGame.spawnTarget(targetDepthX, targetDepthY, 'PUSHUP');
+
+            const testJoint = isLeft ? shoulderL : shoulderR;
+            if (testJoint) {
+              const hitResult = rhythmGame.checkCollision(testJoint.x * 640, testJoint.y * 480, 36);
+              if (hitResult.hit) {
+                soundEngine.playTargetShatterSound();
+                if (hitResult.comboStreak === 5 || hitResult.comboStreak === 10 || hitResult.comboStreak === 20) {
+                  soundEngine.playStreakSound(hitResult.multiplier);
+                }
+                writeLog(`💥 [SHATTER] Pushup Target Hit! Combo: ${hitResult.comboStreak}x (+${100 * hitResult.multiplier} pts)`);
+              }
+            }
+
+            if (currentAngle > 145) {
+              rhythmGame.armTarget();
+            }
+          }
+        }
       }
 
       // Compute Bilateral Symmetry and 3D Spatial Audio Balance Delta
@@ -620,6 +704,10 @@ document.addEventListener('DOMContentLoaded', () => {
         fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline, lateralBalanceDelta);
         cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
 
+        if (stateMachine.midpointAchieved && !repMidpointCoMY && centerOfMass) {
+          repMidpointCoMY = centerOfMass.y;
+        }
+
         if (cadenceResult.isRushed && fsm.currentState === 'IN_PROGRESS' && !currentRepHasFault) {
           voiceCoach.speakPhrase(PhraseKey.CONTROL_DESCENT);
         }
@@ -632,6 +720,8 @@ document.addEventListener('DOMContentLoaded', () => {
           if (activeExercise === 'SQUAT' && currentAngle < 130) {
             initiatedRep = true;
           } else if (activeExercise === 'BICEP_CURL' && currentAngle < 110) {
+            initiatedRep = true;
+          } else if (activeExercise === 'PUSHUP' && currentAngle < 130) {
             initiatedRep = true;
           }
 
@@ -656,6 +746,11 @@ document.addEventListener('DOMContentLoaded', () => {
           } else if (activeExercise === 'BICEP_CURL' && currentAngle > 145) {
             if (fsm.repCount === lastRepCount && !fsm.hasFault) {
               voiceCoach.speakPhrase(PhraseKey.GO_HIGHER);
+            }
+            initiatedRep = false;
+          } else if (activeExercise === 'PUSHUP' && currentAngle > 145) {
+            if (fsm.repCount === lastRepCount && !fsm.hasFault) {
+              voiceCoach.speakPhrase(PhraseKey.GO_LOWER);
             }
             initiatedRep = false;
           }
@@ -684,6 +779,13 @@ document.addEventListener('DOMContentLoaded', () => {
             repVelocities.push(110);
           }
 
+          // Calculate mechanical concentric power output (Watts)
+          const displacementY = (repMidpointCoMY && centerOfMass) ? Math.max(0.12, Math.abs(repMidpointCoMY - centerOfMass.y)) : 0.28;
+          const ascentDuration = fsm.phaseTimings.concentricDuration > 0.05 ? fsm.phaseTimings.concentricDuration : 0.70;
+          powerTelemetry = biomechanicsEngine.calculateConcentricPower(displacementY, ascentDuration, 75);
+          writeLog(`⚡ [POWER] Rep ${fsm.repCount}: ${powerTelemetry.watts}W [${powerTelemetry.rating}] (Ascent: ${ascentDuration}s)`);
+          repMidpointCoMY = 0;
+
           if (symmetry) {
             symmetrySamples.push(symmetry.symmetryScore);
           }
@@ -701,7 +803,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
           soundEngine.playFaultTone();
-          if (activeExercise === 'SQUAT') {
+          if (activeExercise === 'SQUAT' || activeExercise === 'PUSHUP') {
             voiceCoach.speakPhrase(PhraseKey.CHEST_UP);
           }
         }
@@ -776,7 +878,10 @@ document.addEventListener('DOMContentLoaded', () => {
       calibration: calibrationResult,
       laserDepth: { targetY: targetDepthY, isTriggered: isLaserTriggered },
       rirData: { rirEstimate: fsm.rirEstimate, velocityLossPercent: fsm.velocityLossPercent },
-      rhythmGame: rhythmGame.isEnabled ? rhythmGame : null
+      rhythmGame: rhythmGame.isEnabled ? rhythmGame : null,
+      centerOfMass: hasPose ? centerOfMass : null,
+      powerTelemetry,
+      exerciseBanner
     });
   });
 
