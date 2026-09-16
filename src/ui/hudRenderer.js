@@ -422,27 +422,31 @@ export class HUDRenderer {
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    const bannerW = 260;
-    const bannerH = 32;
+    const isPR = banner.exerciseKey.includes('🏆') || banner.exerciseKey.includes('RECORD');
+    const bannerW = isPR ? 310 : 260;
+    const bannerH = 34;
     const x = (width - bannerW) / 2;
     const y = 70;
+    const strokeCol = isPR ? HOLO_COLORS.AMBER : HOLO_COLORS.CYAN;
+    const textCol = isPR ? HOLO_COLORS.AMBER : HOLO_COLORS.MINT;
+    const bannerText = isPR ? banner.exerciseKey : `⚡ AUTO-DETECT: ${banner.exerciseKey}`;
 
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-    ctx.strokeStyle = HOLO_COLORS.CYAN;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+    ctx.strokeStyle = strokeCol;
     ctx.lineWidth = 1.8;
-    ctx.shadowBlur = 16;
-    ctx.shadowColor = HOLO_COLORS.CYAN;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = strokeCol;
 
     this._drawRoundedRect(ctx, x, y, bannerW, bannerH, 8);
     ctx.fill();
     ctx.stroke();
 
     this._drawUnmirroredText(
-      `⚡ AUTO-DETECT: ${banner.exerciseKey}`,
+      bannerText,
       x + (bannerW / 2),
       y + (bannerH / 2),
-      'bold 9.5px "Orbitron", -apple-system, sans-serif',
-      HOLO_COLORS.MINT,
+      'bold 9px "Orbitron", -apple-system, sans-serif',
+      textCol,
       'center'
     );
 

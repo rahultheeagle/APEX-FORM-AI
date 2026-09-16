@@ -293,4 +293,45 @@ export class SoundEngine {
       osc.stop(startT + stepDuration + 0.1);
     });
   }
+
+  /**
+   * Synthesizes a celebratory triumphant fanfare chime when a lifetime PR is broken.
+   */
+  playRecordFanfare() {
+    this.unlockContext();
+    if (!this.audioContext) return;
+
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+
+    // Triumphant fanfare chords & arpeggios: G4, C5, E5, G5, C6
+    const fanfareNotes = [
+      { freq: 392.00, time: 0.00, dur: 0.12 }, // G4
+      { freq: 523.25, time: 0.12, dur: 0.12 }, // C5
+      { freq: 659.25, time: 0.24, dur: 0.14 }, // E5
+      { freq: 783.99, time: 0.38, dur: 0.18 }, // G5
+      { freq: 1046.50, time: 0.56, dur: 0.45 }, // C6 (sustained)
+      { freq: 1318.51, time: 0.56, dur: 0.45 }  // E6 (harmony)
+    ];
+
+    fanfareNotes.forEach((n) => {
+      const startT = now + n.time;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = n.time >= 0.56 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(n.freq, startT);
+
+      gain.gain.setValueAtTime(0.0, startT);
+      gain.gain.linearRampToValueAtTime(0.18, startT + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, startT + n.dur);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(startT);
+      osc.stop(startT + n.dur + 0.05);
+    });
+  }
 }
+

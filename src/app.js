@@ -24,6 +24,8 @@ import { HUDRenderer } from './ui/hudRenderer.js';
 import { ExerciseClassifier } from './logic/exerciseClassifier.js';
 import { SummaryModal } from './ui/summaryModal.js';
 import { SettingsModal } from './ui/settingsModal.js';
+import { HistoryDB } from './storage/historyDb.js';
+import { HistoryDrawer } from './ui/historyDrawer.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -37,6 +39,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const telemetryDrawerEl = /** @type {HTMLElement|null} */ (document.getElementById('telemetry-drawer'));
   const settingsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('settings-btn'));
   const toggleGameBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('toggle-game-btn'));
+  const historyBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('history-btn'));
+  const historyDrawerEl = /** @type {HTMLElement|null} */ (document.getElementById('history-drawer'));
 
   // AI Robotic Trainer DOM Elements
   const robotTrainerCardEl = document.getElementById('robot-trainer-card');
@@ -75,7 +79,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const hudRenderer = new HUDRenderer(canvas);
   const summaryModal = new SummaryModal(summaryModalEl);
   const settingsModal = new SettingsModal(settingsModalEl, voiceCoach);
+  const historyDb = new HistoryDB();
+  const historyDrawer = historyDrawerEl ? new HistoryDrawer(historyDrawerEl, historyDb) : null;
   const exerciseClassifier = new ExerciseClassifier();
+
+  if (historyBtn && historyDrawer) {
+    historyBtn.addEventListener('click', () => {
+      historyDrawer.toggle();
+    });
+  }
 
   /** @type {string} */
   let activeExercise = exerciseSelect ? exerciseSelect.value : 'SQUAT';
@@ -1051,7 +1063,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  stopBtn.addEventListener('click', () => {
+  stopBtn.addEventListener('click', async () => {
     writeLog('Terminating optical stream...');
     voiceCoach.speakPhrase(PhraseKey.SET_COMPLETE);
     
@@ -1073,12 +1085,64 @@ document.addEventListener('DOMContentLoaded', () => {
     const avgSymmetry = symmetrySamples.length > 0 ?
       Number((symmetrySamples.reduce((a, b) => a + b, 0) / symmetrySamples.length).toFixed(1)) : 98.4;
     const mechanicalWork = biomechanicsEngine.calculateMechanicalWork(totalRepsCount, activeExercise);
+    const durationSeconds = Math.round((Date.now() - (sessionStartTime || Date.now())) / 1000);
 
     // Stop all WebRTC tracks and frame loops
     stopTracking();
     cameraManager.stopStream();
     writeLog('Session completed. Archiving biomechanical telemetry...');
     updateUIState(false);
+
+    // Auto-save to HistoryDB and check lifetime PR milestones
+    try {
+      const oldPRs = await historyDb.getPersonalRecords(activeExercise);
+
+      const sessionRecord = {
+        timestamp: Date.now(),
+        exerciseType: activeExercise,
+        totalReps: totalRepsCount,
+        avgDepthAngle: Math.round(avgDepthAngle),
+        formAccuracy: Math.round(accuracyRate),
+        durationSeconds,
+        barPathGrade: barPathEval.rating,
+        avgSymmetry,
+        mechanicalWork,
+        repDetails: completedReps.map((r, i) => ({
+          repNum: r.repNum,
+          peakAngle: Math.round(r.peakAngle),
+          hadFault: r.hadFault,
+          velocity: repVelocities[i] || 0
+        }))
+      };
+
+      await historyDb.saveSession(sessionRecord);
+
+      // Check if PR was broken
+      const isNewMaxReps = totalRepsCount > 0 && totalRepsCount > oldPRs.maxReps;
+      const isNewBestAcc = totalRepsCount >= 3 && accuracyRate > oldPRs.bestAccuracy;
+      const isNewDeepest = totalRepsCount > 0 && avgDepthAngle > 0 && (oldPRs.deepestAngle === 0 || avgDepthAngle < oldPRs.deepestAngle);
+
+      if (isNewMaxReps || isNewBestAcc || isNewDeepest) {
+        soundEngine.playRecordFanfare();
+        const prMilestones = [];
+        if (isNewMaxReps) prMilestones.push(`MAX REPS: ${totalRepsCount}`);
+        if (isNewBestAcc) prMilestones.push(`ACCURACY: ${Math.round(accuracyRate)}%`);
+        if (isNewDeepest) prMilestones.push(`DEPTH: ${Math.round(avgDepthAngle)}°`);
+
+        exerciseBanner = { exerciseKey: '🏆 NEW PERSONAL RECORD', timestamp: performance.now() };
+        if (hudStatusBadgeEl) {
+          hudStatusBadgeEl.textContent = '🏆 NEW RECORD';
+          hudStatusBadgeEl.classList.add('hud-status-pill--validated');
+        }
+        writeLog(`🏆 [NEW PERSONAL RECORD] Smashed lifetime PR: ${prMilestones.join(' | ')}!`);
+      }
+
+      if (historyDrawer && historyDrawer.isOpen) {
+        historyDrawer.refresh();
+      }
+    } catch (dbErr) {
+      console.warn('HistoryDB: Failed to persist session record:', dbErr);
+    }
 
     // Launch advanced analytics card
     summaryModal.open({
