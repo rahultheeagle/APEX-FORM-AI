@@ -26,6 +26,8 @@ import { SummaryModal } from './ui/summaryModal.js';
 import { SettingsModal } from './ui/settingsModal.js';
 import { HistoryDB } from './storage/historyDb.js';
 import { HistoryDrawer } from './ui/historyDrawer.js';
+import { StrainEngine } from './core/strainEngine.js';
+import { DigitalTwin3D } from './ui/digitalTwin3D.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -50,6 +52,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const robotPhaseBadgeEl = document.getElementById('robot-phase-badge');
   const robotSyncTextEl = document.getElementById('robot-sync-text');
   const robotSyncBarFillEl = document.getElementById('robot-sync-bar-fill');
+
+  // 3D Spatial Digital Twin DOM Elements
+  const digitalTwinCardEl = document.getElementById('digital-twin-card');
+  const digitalTwinCanvas = /** @type {HTMLCanvasElement|null} */ (document.getElementById('digital-twin-canvas'));
+  const digitalTwinCloseBtn = document.getElementById('digital-twin-close-btn');
+  const toggleTwinBtn = document.getElementById('toggle-twin-btn');
+  const digitalTwinStrainBadge = document.getElementById('digital-twin-strain-badge');
+  const strainBarQuads = document.getElementById('strain-bar-quads');
+  const strainBarLumbar = document.getElementById('strain-bar-lumbar');
+  const strainBarGlutes = document.getElementById('strain-bar-glutes');
+  const strainValQuads = document.getElementById('strain-val-quads');
+  const strainValLumbar = document.getElementById('strain-val-lumbar');
+  const strainValGlutes = document.getElementById('strain-val-glutes');
 
   // Spatial Floating HUD DOM elements
   const sessionTimerEl = document.getElementById('session-timer');
@@ -82,6 +97,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const historyDb = new HistoryDB();
   const historyDrawer = historyDrawerEl ? new HistoryDrawer(historyDrawerEl, historyDb) : null;
   const exerciseClassifier = new ExerciseClassifier();
+  const strainEngine = new StrainEngine();
+  const digitalTwin = digitalTwinCanvas ? new DigitalTwin3D(digitalTwinCanvas) : null;
+  let isTwinActive = true;
+  let currentStrainData = null;
 
   if (historyBtn && historyDrawer) {
     historyBtn.addEventListener('click', () => {
@@ -179,6 +198,63 @@ document.addEventListener('DOMContentLoaded', () => {
     requestAnimationFrame(renderRobotTrainerLoop);
   };
   requestAnimationFrame(renderRobotTrainerLoop);
+
+  // Toggle 3D Spatial Digital Twin PiP window
+  const toggleTwin = () => {
+    isTwinActive = !isTwinActive;
+    if (digitalTwinCardEl) {
+      digitalTwinCardEl.classList.toggle('digital-twin-card--active', isTwinActive);
+    }
+    if (toggleTwinBtn) {
+      toggleTwinBtn.classList.toggle('cyber-btn--twin-active', isTwinActive);
+    }
+    writeLog(isTwinActive ? '🧬 3D Spatial Digital Twin & Kinetic Rig Activated.' : '🧬 3D Digital Twin Deactivated.');
+  };
+
+  if (toggleTwinBtn) toggleTwinBtn.addEventListener('click', toggleTwin);
+  if (digitalTwinCloseBtn) {
+    digitalTwinCloseBtn.addEventListener('click', () => {
+      isTwinActive = false;
+      if (digitalTwinCardEl) digitalTwinCardEl.classList.remove('digital-twin-card--active');
+      if (toggleTwinBtn) toggleTwinBtn.classList.remove('cyber-btn--twin-active');
+    });
+  }
+
+  /**
+   * Updates the 3D Twin PiP Card telemetry bars & load status badge.
+   * @param {Object} strain
+   */
+  const updateTwinHUD = (strain) => {
+    if (!strain) return;
+    const qPct = strain.quadsPct ?? Math.round((strain.quadsLoad || 0) * 100);
+    const lPct = strain.lowerBackPct ?? Math.round((strain.lowerBackLoad || 0) * 100);
+    const gPct = strain.glutePct ?? Math.round((strain.gluteLoad || 0) * 100);
+
+    if (strainBarQuads) strainBarQuads.style.width = `${qPct}%`;
+    if (strainValQuads) strainValQuads.textContent = `${qPct}%`;
+
+    if (strainBarLumbar) strainBarLumbar.style.width = `${lPct}%`;
+    if (strainValLumbar) strainValLumbar.textContent = `${lPct}%`;
+
+    if (strainBarGlutes) strainBarGlutes.style.width = `${gPct}%`;
+    if (strainValGlutes) strainValGlutes.textContent = `${gPct}%`;
+
+    if (digitalTwinStrainBadge) {
+      const peakName = strain.peakJoint || 'KINETIC';
+      const status = strain.status || 'SAFE';
+      digitalTwinStrainBadge.textContent = `${peakName}: ${status}`;
+      if (status === 'OVERLOAD') {
+        digitalTwinStrainBadge.style.color = '#ff0055';
+        digitalTwinStrainBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
+      } else if (status === 'MODERATE') {
+        digitalTwinStrainBadge.style.color = '#f59e0b';
+        digitalTwinStrainBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+      } else {
+        digitalTwinStrainBadge.style.color = '#00f2fe';
+        digitalTwinStrainBadge.style.borderColor = 'rgba(0, 242, 254, 0.4)';
+      }
+    }
+  };
 
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
@@ -331,6 +407,8 @@ document.addEventListener('DOMContentLoaded', () => {
     calibrationEngine.reset();
     gestureController.reset();
     cadenceEngine.reset();
+    strainEngine.reset();
+    if (digitalTwin) digitalTwin.resetPose();
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -388,6 +466,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize PoseEngine with callback to process 3D landmarks at 60 FPS
   const poseEngine = new PoseEngine((results) => {
     const landmarks = results.poseLandmarks;
+    const worldLandmarks = results.poseWorldLandmarks || results.poseLandmarks;
     const hasPose = !!(landmarks && landmarks.length > 0);
     const newState = hasPose ? 'detected' : 'searching';
 
@@ -435,6 +514,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       centerOfMass = biomechanicsEngine.calculateCenterOfMass(landmarks);
+
+      // Kinetic Joint Torques & 3D Spatial Digital Twin Mirroring
+      currentStrainData = strainEngine.computeJointTorques(worldLandmarks, activeExercise);
+      if (digitalTwin && isTwinActive) {
+        digitalTwin.updatePose(worldLandmarks, currentStrainData);
+        updateTwinHUD(currentStrainData);
+      }
 
       // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
       calibrationResult = calibrationEngine.evaluateFrame(landmarks);
@@ -505,7 +591,9 @@ document.addEventListener('DOMContentLoaded', () => {
           rhythmGame: null,
           centerOfMass,
           powerTelemetry,
-          exerciseBanner
+          exerciseBanner,
+          strainData: currentStrainData,
+          isTwinActive
         });
         return;
       }
@@ -893,7 +981,9 @@ document.addEventListener('DOMContentLoaded', () => {
       rhythmGame: rhythmGame.isEnabled ? rhythmGame : null,
       centerOfMass: hasPose ? centerOfMass : null,
       powerTelemetry,
-      exerciseBanner
+      exerciseBanner,
+      strainData: hasPose ? currentStrainData : null,
+      isTwinActive
     });
   });
 
@@ -939,6 +1029,8 @@ document.addEventListener('DOMContentLoaded', () => {
     calibrationEngine.reset();
     gestureController.reset();
     cadenceEngine.reset();
+    strainEngine.reset();
+    if (digitalTwin) digitalTwin.resetPose();
     rhythmGame.reset();
     
     // Reset state parameters
@@ -980,6 +1072,8 @@ document.addEventListener('DOMContentLoaded', () => {
     calibrationEngine.reset();
     gestureController.reset();
     cadenceEngine.reset();
+    strainEngine.reset();
+    if (digitalTwin) digitalTwin.resetPose();
     
     // Halt session timer
     stopSessionTimer();

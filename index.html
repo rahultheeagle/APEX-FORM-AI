@@ -18,6 +18,7 @@
   
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 </head>
 <body class="viewport-app">
   <!-- Fullscreen Spatial Viewport -->
@@ -90,6 +91,43 @@
         </div>
       </aside>
 
+      <!-- Floating Picture-in-Picture 3D Spatial Digital Twin Card -->
+      <aside id="digital-twin-card" class="digital-twin-card digital-twin-card--active">
+        <div class="digital-twin-card__header">
+          <span class="digital-twin-card__badge">🧬 3D DIGITAL TWIN // KINETIC RIG</span>
+          <button id="digital-twin-close-btn" class="digital-twin-card__close" title="Minimize 3D Twin">✕</button>
+        </div>
+        <div class="digital-twin-card__viewport">
+          <canvas id="digital-twin-canvas" width="220" height="240"></canvas>
+          <div class="digital-twin-card__strain-badge" id="digital-twin-strain-badge">QUAD TORQUE: SAFE</div>
+        </div>
+        <div class="digital-twin-card__footer">
+          <div class="strain-bars-wrap">
+            <div class="strain-bar-row">
+              <span class="strain-bar-label">QUADS</span>
+              <div class="strain-bar-track">
+                <div id="strain-bar-quads" class="strain-bar-fill strain-bar-fill--quads" style="width: 0%;"></div>
+              </div>
+              <span id="strain-val-quads" class="strain-bar-num">0%</span>
+            </div>
+            <div class="strain-bar-row">
+              <span class="strain-bar-label">LUMBAR</span>
+              <div class="strain-bar-track">
+                <div id="strain-bar-lumbar" class="strain-bar-fill strain-bar-fill--lumbar" style="width: 0%;"></div>
+              </div>
+              <span id="strain-val-lumbar" class="strain-bar-num">0%</span>
+            </div>
+            <div class="strain-bar-row">
+              <span class="strain-bar-label">GLUTES</span>
+              <div class="strain-bar-track">
+                <div id="strain-bar-glutes" class="strain-bar-fill strain-bar-fill--glutes" style="width: 0%;"></div>
+              </div>
+              <span id="strain-val-glutes" class="strain-bar-num">0%</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
       <!-- Bottom Floating Control Dock -->
       <footer class="hud-dock">
         <div class="hud-dock__glass">
@@ -120,6 +158,12 @@
           <button id="toggle-trainer-btn" class="cyber-btn cyber-btn--ghost" title="Toggle AI Robot Trainer">
             <span class="cyber-btn__icon">🤖</span>
             <span class="cyber-btn__text">TRAINER</span>
+          </button>
+
+          <!-- Toggle 3D Spatial Digital Twin Button -->
+          <button id="toggle-twin-btn" class="cyber-btn cyber-btn--ghost cyber-btn--twin-active" title="Toggle 3D Digital Twin">
+            <span class="cyber-btn__icon">🧬</span>
+            <span class="cyber-btn__text">3D TWIN</span>
           </button>
 
           <!-- Toggle AR Rhythm Game Mode -->

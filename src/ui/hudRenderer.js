@@ -172,7 +172,9 @@ export class HUDRenderer {
     rhythmGame = null,
     centerOfMass = null,
     powerTelemetry = null,
-    exerciseBanner = null
+    exerciseBanner = null,
+    strainData = null,
+    isTwinActive = false
   }) {
     this.clear();
 
@@ -276,7 +278,120 @@ export class HUDRenderer {
       this._renderFaultBanner(faultMessage, width, height, now);
     }
 
+    // 19. 3D Spatial Digital Twin & Kinetic Muscle Strain Telemetry Card
+    if (strainData && isTwinActive) {
+      this._renderMuscleStrainCard(strainData, width, height, now);
+    }
+
     this.ctx.restore();
+  }
+
+  /**
+   * Renders real-time 3D Digital Twin & Kinetic Muscle Strain Telemetry Card on HUD.
+   * 
+   * @param {Object} strainData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderMuscleStrainCard(strainData, width, height, now) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const cardW = 210;
+    const cardH = 78;
+    const x = 20;
+    const y = 172;
+
+    const isOverload = strainData.status === 'OVERLOAD';
+    let borderColor = HOLO_COLORS.CYAN;
+    if (isOverload) {
+      const pulse = Math.sin(now / 120) * 0.2 + 0.8;
+      borderColor = `rgba(255, 0, 85, ${pulse})`;
+    } else if (strainData.status === 'MODERATE') {
+      borderColor = HOLO_COLORS.AMBER;
+    }
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 1.3;
+    ctx.shadowBlur = isOverload ? 14 : 8;
+    ctx.shadowColor = borderColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    // Card Header: Title & Status
+    const statusColor = isOverload ? HOLO_COLORS.CRIMSON : (strainData.status === 'MODERATE' ? HOLO_COLORS.AMBER : HOLO_COLORS.MINT);
+    this._drawUnmirroredText(
+      '🧬 3D TWIN: MUSCLE LOAD',
+      x + 10,
+      y + 12,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.CYAN,
+      'left'
+    );
+
+    this._drawUnmirroredText(
+      `[${strainData.status}]`,
+      x + cardW - 10,
+      y + 12,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      statusColor,
+      'right'
+    );
+
+    // Mini Muscle Strain Progress Bars
+    const rows = [
+      { label: 'QUADS', pct: strainData.quadsPct, color: '#00f2fe' },
+      { label: 'LUMBAR', pct: strainData.lowerBackPct, color: strainData.lowerBackPct > 70 ? '#ff0055' : '#f59e0b' },
+      { label: 'GLUTES', pct: strainData.glutePct, color: '#00ff87' }
+    ];
+
+    const trackX = x + 62;
+    const trackW = 95;
+    const trackH = 5;
+
+    rows.forEach((row, idx) => {
+      const rowY = y + 27 + (idx * 16);
+
+      // Label
+      this._drawUnmirroredText(
+        row.label,
+        x + 10,
+        rowY + 4,
+        'bold 6.5px "Orbitron", sans-serif',
+        '#94a3b8',
+        'left'
+      );
+
+      // Track Background
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      this._drawRoundedRect(ctx, trackX, rowY, trackW, trackH, 2.5);
+      ctx.fill();
+
+      // Track Fill
+      const fillW = Math.max(2, (Math.min(100, row.pct) / 100) * trackW);
+      ctx.fillStyle = row.color;
+      ctx.shadowBlur = 4;
+      ctx.shadowColor = row.color;
+      this._drawRoundedRect(ctx, trackX, rowY, fillW, trackH, 2.5);
+      ctx.fill();
+
+      // Percentage Text
+      this._drawUnmirroredText(
+        `${row.pct}%`,
+        x + cardW - 10,
+        rowY + 4,
+        'bold 7px "Orbitron", sans-serif',
+        '#e2e8f0',
+        'right'
+      );
+    });
+
+    ctx.restore();
   }
 
   /**
