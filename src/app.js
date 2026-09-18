@@ -28,6 +28,8 @@ import { HistoryDB } from './storage/historyDb.js';
 import { HistoryDrawer } from './ui/historyDrawer.js';
 import { StrainEngine } from './core/strainEngine.js';
 import { DigitalTwin3D } from './ui/digitalTwin3D.js';
+import { BluetoothManager } from './iot/bluetoothManager.js';
+import { PeerSync } from './network/peerSync.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -66,6 +68,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const strainValLumbar = document.getElementById('strain-val-lumbar');
   const strainValGlutes = document.getElementById('strain-val-glutes');
 
+  // Web Bluetooth HR and Peer Co-Op DOM Elements
+  const bleConnectBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('ble-connect-btn'));
+  const bleBtnIcon = document.getElementById('ble-btn-icon');
+  const bleBtnText = document.getElementById('ble-btn-text');
+  const peerCoopBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('peer-coop-btn'));
+
   // Spatial Floating HUD DOM elements
   const sessionTimerEl = document.getElementById('session-timer');
   const exerciseBadgeEl = document.getElementById('exercise-badge');
@@ -99,6 +107,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const exerciseClassifier = new ExerciseClassifier();
   const strainEngine = new StrainEngine();
   const digitalTwin = digitalTwinCanvas ? new DigitalTwin3D(digitalTwinCanvas) : null;
+  const bluetoothManager = new BluetoothManager();
+  const peerSync = new PeerSync();
   let isTwinActive = true;
   let currentStrainData = null;
 
@@ -255,6 +265,68 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
   };
+
+  // Web Bluetooth Heart Rate Monitor Connection Handler
+  if (bleConnectBtn) {
+    bleConnectBtn.addEventListener('click', async () => {
+      soundEngine.unlockContext();
+
+      if (bluetoothManager.isConnected) {
+        bluetoothManager.disconnect();
+        bleConnectBtn.classList.remove('hud-ble-btn--connected', 'hud-ble-btn--pulsing');
+        if (bleBtnText) bleBtnText.textContent = 'Connect Strap';
+        if (bleBtnIcon) bleBtnIcon.textContent = '❤️';
+        writeLog('❤️ [BLE] Heart Rate Strap disconnected.');
+        return;
+      }
+
+      writeLog('❤️ [BLE] Searching for Bluetooth Heart Rate Strap (GATT 0x180D)...');
+      if (bleBtnText) bleBtnText.textContent = 'Searching...';
+
+      if (BluetoothManager.isSupported()) {
+        try {
+          const res = await bluetoothManager.connectHeartRateMonitor();
+          bleConnectBtn.classList.add('hud-ble-btn--connected', 'hud-ble-btn--pulsing');
+          if (bleBtnText) bleBtnText.textContent = `${res.deviceName.slice(0, 12)}`;
+          soundEngine.playSuccessChime();
+          writeLog(`❤️ [BLE] Paired: ${res.deviceName} (Streaming 60 FPS Cardiac Telemetry)`);
+        } catch (error) {
+          const errStr = error instanceof Error ? error.message : String(error);
+          console.warn('BluetoothManager: Pairing canceled or failed, switching to demo mode:', errStr);
+          bluetoothManager.startDemoSimulation(136);
+          bleConnectBtn.classList.add('hud-ble-btn--connected', 'hud-ble-btn--pulsing');
+          if (bleBtnText) bleBtnText.textContent = 'BioStrap (Sim)';
+          writeLog('❤️ [BLE DEMO] Hardware pairing canceled/unavailable. Activated Simulated BioStrap telemetry.');
+        }
+      } else {
+        bluetoothManager.startDemoSimulation(136);
+        bleConnectBtn.classList.add('hud-ble-btn--connected', 'hud-ble-btn--pulsing');
+        if (bleBtnText) bleBtnText.textContent = 'BioStrap (Sim)';
+        writeLog('❤️ [BLE DEMO] Web Bluetooth not supported in this browser. Activated Simulated BioStrap telemetry.');
+      }
+    });
+
+    bluetoothManager.onHeartRateUpdate((data) => {
+      if (data.bpm > 0 && bleBtnText && bluetoothManager.isConnected) {
+        bleBtnText.textContent = `${data.bpm} BPM`;
+      }
+    });
+  }
+
+  // Co-Op Peer Telemetry & Ghost Athlete Toggle Handler
+  if (peerCoopBtn) {
+    peerCoopBtn.addEventListener('click', () => {
+      soundEngine.unlockContext();
+      const isGhost = peerSync.toggleGhostDemo();
+      peerCoopBtn.classList.toggle('cyber-btn--peer-active', isGhost);
+      if (isGhost) {
+        soundEngine.playSuccessChime();
+        writeLog('👥 [CO-OP] Low-Bandwidth Telemetry Stream Active (<0.6 KB/s). Dual-Athlete Ghost Overlay Rendered.');
+      } else {
+        writeLog('👥 [CO-OP] Telemetry Stream Deactivated.');
+      }
+    });
+  }
 
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
@@ -522,6 +594,20 @@ document.addEventListener('DOMContentLoaded', () => {
         updateTwinHUD(currentStrainData);
       }
 
+      // Low-Bandwidth Co-Op Pose Serialization (< 0.6 KB / frame)
+      peerSync.serializePose(landmarks, {
+        timestamp: performance.now(),
+        exerciseType: activeExercise,
+        repCount: stateMachine.repCount,
+        bpm: bluetoothManager.currentBpm,
+        hrZone: bluetoothManager.currentZone.id
+      });
+
+      // Update Procedural Ghost Athlete simulation if active
+      if (peerSync.isGhostEnabled) {
+        peerSync.updateGhostSimulation(activeExercise, performance.now());
+      }
+
       // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
       calibrationResult = calibrationEngine.evaluateFrame(landmarks);
 
@@ -593,7 +679,9 @@ document.addEventListener('DOMContentLoaded', () => {
           powerTelemetry,
           exerciseBanner,
           strainData: currentStrainData,
-          isTwinActive
+          isTwinActive,
+          hrData: bluetoothManager.getHeartRateData(),
+          peerData: peerSync.getPeerData()
         });
         return;
       }
@@ -865,6 +953,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fsm.repCount > lastRepCount) {
           soundEngine.playSuccessChime();
           voiceCoach.speakPhrase(PhraseKey.REP_SUCCESS);
+          bluetoothManager.adjustSimulatedBpm(3.5);
 
           completedReps.push({
             repNum: fsm.repCount,
@@ -937,6 +1026,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (symmetry) {
           logLine += ` | Symm: L${symmetry.leftPct}%:R${symmetry.rightPct}%`;
         }
+        if (bluetoothManager.currentBpm > 0) {
+          logLine += ` | HR: ${bluetoothManager.currentBpm} BPM [${bluetoothManager.currentZone.label}]`;
+        }
+        if (peerSync.isPeerConnected) {
+          logLine += ` | Co-Op: ${peerSync.peerMetadata.repCount} reps`;
+        }
         if (fsm.hasFault) {
           logLine += ` [FAULT: ${fsm.faultMessage}]`;
         }
@@ -983,7 +1078,9 @@ document.addEventListener('DOMContentLoaded', () => {
       powerTelemetry,
       exerciseBanner,
       strainData: hasPose ? currentStrainData : null,
-      isTwinActive
+      isTwinActive,
+      hrData: bluetoothManager.getHeartRateData(),
+      peerData: peerSync.getPeerData()
     });
   });
 

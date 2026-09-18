@@ -174,7 +174,9 @@ export class HUDRenderer {
     powerTelemetry = null,
     exerciseBanner = null,
     strainData = null,
-    isTwinActive = false
+    isTwinActive = false,
+    hrData = null,
+    peerData = null
   }) {
     this.clear();
 
@@ -283,7 +285,239 @@ export class HUDRenderer {
       this._renderMuscleStrainCard(strainData, width, height, now);
     }
 
+    // 20. Web Bluetooth Biometric Heart Rate Telemetry & EKG Waveform
+    if (hrData && (hrData.connected || hrData.bpm > 0)) {
+      this._renderHeartRateTelemetry(hrData, width, height, now);
+    }
+
+    // 21. Low-Bandwidth Co-Op Peer Telemetry & Ghost Athlete Skeleton
+    if (peerData && peerData.isConnected && peerData.landmarks) {
+      this._renderPeerGhostOverlay(peerData.landmarks, peerData.metadata, width, height, now);
+    }
+
     this.ctx.restore();
+  }
+
+  /**
+   * Renders real-time Web Bluetooth Heart Rate Telemetry HUD module with procedural EKG wave.
+   * 
+   * @param {{ bpm: number, hrZone: any, connected: boolean, isSimulated: boolean, deviceName: string }} hrData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderHeartRateTelemetry(hrData, width, height, now) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const bpm = hrData.bpm || 0;
+    const zone = hrData.hrZone || { id: 0, label: 'REST', color: '#94a3b8' };
+    const zoneColor = zone.color || '#38bdf8';
+
+    // Positioned in top-left canvas space -> renders on top-right of user's mirrored screen
+    const x = 20;
+    const y = 62;
+    const cardW = 180;
+    const cardH = 48;
+
+    // Heartbeat lub-dub pulse scale
+    const beatPeriod = (60 / Math.max(45, bpm)) * 1000;
+    const phase = (now % beatPeriod) / beatPeriod;
+    let heartScale = 1.0;
+    if (phase < 0.16) {
+      heartScale = 1.0 + Math.sin((phase / 0.16) * Math.PI) * 0.35;
+    } else if (phase >= 0.22 && phase < 0.38) {
+      heartScale = 1.0 + Math.sin(((phase - 0.22) / 0.16) * Math.PI) * 0.20;
+    }
+
+    // Card background & glowing border
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = zoneColor;
+    ctx.lineWidth = 1.3;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = zoneColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    // Pulsing Heart Icon
+    ctx.save();
+    const hx = x + 18;
+    const hy = y + 17;
+    ctx.translate(hx, hy);
+    ctx.scale(heartScale, heartScale);
+    this._drawUnmirroredText('❤️', 0, 0, '12px "Inter", sans-serif', zoneColor, 'center');
+    ctx.restore();
+
+    // BPM Value Readout
+    this._drawUnmirroredText(
+      `${bpm > 0 ? bpm : '--'}`,
+      x + 36,
+      y + 16,
+      'bold 13px "Orbitron", -apple-system, sans-serif',
+      HOLO_COLORS.WHITE,
+      'left'
+    );
+
+    this._drawUnmirroredText(
+      'BPM',
+      x + (bpm >= 100 ? 76 : 64),
+      y + 17,
+      'bold 7.5px "Orbitron", sans-serif',
+      '#94a3b8',
+      'left'
+    );
+
+    // Zone Badge
+    const zoneLabel = `Z${zone.id || 1} [${zone.label || 'AEROBIC'}]`;
+    this._drawUnmirroredText(
+      zoneLabel,
+      x + cardW - 10,
+      y + 16,
+      'bold 7.5px "Orbitron", sans-serif',
+      zoneColor,
+      'right'
+    );
+
+    // Procedural Ambient EKG Sine/Cardiac Waveform Line
+    const ekgX = x + 10;
+    const ekgY = y + 35;
+    const ekgW = cardW - 20;
+    const ekgH = 12;
+
+    ctx.beginPath();
+    const samples = 48;
+    const cycles = 1.8;
+    const scroll = (now / beatPeriod) * cycles;
+
+    for (let i = 0; i <= samples; i++) {
+      const u = i / samples;
+      const px = ekgX + (u * ekgW);
+
+      // Parametric cardiac P-Q-R-S-T wave function
+      const phi = ((u * cycles) + scroll) % 1.0;
+      let wave = 0;
+
+      if (phi >= 0.12 && phi < 0.22) {
+        // P wave
+        wave = Math.sin(((phi - 0.12) / 0.10) * Math.PI) * 0.24;
+      } else if (phi >= 0.32 && phi < 0.36) {
+        // Q dip
+        wave = -Math.sin(((phi - 0.32) / 0.04) * Math.PI) * 0.20;
+      } else if (phi >= 0.36 && phi < 0.44) {
+        // R spike (tall)
+        wave = Math.sin(((phi - 0.36) / 0.08) * Math.PI) * 0.95;
+      } else if (phi >= 0.44 && phi < 0.50) {
+        // S dip
+        wave = -Math.sin(((phi - 0.44) / 0.06) * Math.PI) * 0.38;
+      } else if (phi >= 0.58 && phi < 0.74) {
+        // T wave
+        wave = Math.sin(((phi - 0.58) / 0.16) * Math.PI) * 0.32;
+      }
+
+      const py = ekgY - (wave * (ekgH / 2));
+      if (i === 0) {
+        ctx.moveTo(px, py);
+      } else {
+        ctx.lineTo(px, py);
+      }
+    }
+
+    ctx.strokeStyle = zoneColor;
+    ctx.lineWidth = 1.4;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = zoneColor;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders translucent holographic ghost wireframe skeleton for Co-Op peer athlete.
+   * 
+   * @param {Array<{ x: number, y: number, z?: number, visibility?: number }>} peerLandmarks
+   * @param {{ repCount?: number, bpm?: number, peerName?: string }} [peerMeta]
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderPeerGhostOverlay(peerLandmarks, peerMeta, width, height, now) {
+    if (!peerLandmarks || peerLandmarks.length < 17) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const ghostColor = '#c084fc'; // Cyber Lavender / Magenta
+    ctx.strokeStyle = ghostColor;
+    ctx.fillStyle = ghostColor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = ghostColor;
+
+    // Draw Ghost Skeletal Connections
+    for (let i = 0; i < SKELETON_CONNECTIONS.length; i++) {
+      const [idxA, idxB] = SKELETON_CONNECTIONS[i];
+      const pA = peerLandmarks[idxA];
+      const pB = peerLandmarks[idxB];
+
+      if (pA && pB && (pA.visibility || 1) > 0.4 && (pB.visibility || 1) > 0.4) {
+        ctx.beginPath();
+        ctx.moveTo(pA.x * width, pA.y * height);
+        ctx.lineTo(pB.x * width, pB.y * height);
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+
+    // Draw Joint Nodes
+    for (let i = 0; i < MAJOR_JOINTS.length; i++) {
+      const idx = MAJOR_JOINTS[i];
+      const lm = peerLandmarks[idx];
+      if (lm && (lm.visibility || 1) > 0.4) {
+        ctx.beginPath();
+        ctx.arc(lm.x * width, lm.y * height, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(lm.x * width, lm.y * height, 5.5, 0, Math.PI * 2);
+        ctx.strokeStyle = ghostColor;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+    }
+
+    // Ghost Head Floating Badge
+    const nose = peerLandmarks[0];
+    if (nose && (nose.visibility || 1) > 0.4) {
+      const tagX = nose.x * width;
+      const tagY = (nose.y * height) - 22;
+      const peerReps = peerMeta ? peerMeta.repCount || 0 : 0;
+      const peerBpm = peerMeta ? peerMeta.bpm || 0 : 0;
+      const ghostTag = `👥 CO-OP: ${peerReps} REPS ${peerBpm > 0 ? `| ${peerBpm} BPM` : ''}`;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.strokeStyle = ghostColor;
+      ctx.lineWidth = 1.0;
+      this._drawRoundedRect(ctx, tagX - 65, tagY - 10, 130, 18, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      this._drawUnmirroredText(
+        ghostTag,
+        tagX,
+        tagY,
+        'bold 7px "Orbitron", sans-serif',
+        ghostColor,
+        'center'
+      );
+    }
+
+    ctx.restore();
   }
 
   /**
