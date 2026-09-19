@@ -30,6 +30,8 @@ import { StrainEngine } from './core/strainEngine.js';
 import { DigitalTwin3D } from './ui/digitalTwin3D.js';
 import { BluetoothManager } from './iot/bluetoothManager.js';
 import { PeerSync } from './network/peerSync.js';
+import { WakeLockManager } from './core/wakeLockManager.js';
+import { HapticEngine } from './core/hapticEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -109,6 +111,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const digitalTwin = digitalTwinCanvas ? new DigitalTwin3D(digitalTwinCanvas) : null;
   const bluetoothManager = new BluetoothManager();
   const peerSync = new PeerSync();
+  const wakeLockManager = new WakeLockManager();
+  const hapticEngine = new HapticEngine();
   let isTwinActive = true;
   let currentStrainData = null;
 
@@ -481,6 +485,7 @@ document.addEventListener('DOMContentLoaded', () => {
     cadenceEngine.reset();
     strainEngine.reset();
     if (digitalTwin) digitalTwin.resetPose();
+    hudRenderer.clearWristHistory();
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -608,6 +613,18 @@ document.addEventListener('DOMContentLoaded', () => {
         peerSync.updateGhostSimulation(activeExercise, performance.now());
       }
 
+      // Compute wrist midpoint for 3D Barbell Path Ribbon Tracer
+      let wristMidpoint = null;
+      const wristL = landmarks[15];
+      const wristR = landmarks[16];
+      if (wristL && wristR && wristL.visibility > 0.35 && wristR.visibility > 0.35) {
+        wristMidpoint = { x: (wristL.x + wristR.x) / 2, y: (wristL.y + wristR.y) / 2 };
+      } else if (wristL && wristL.visibility > 0.35) {
+        wristMidpoint = { x: wristL.x, y: wristL.y };
+      } else if (wristR && wristR.visibility > 0.35) {
+        wristMidpoint = { x: wristR.x, y: wristR.y };
+      }
+
       // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
       calibrationResult = calibrationEngine.evaluateFrame(landmarks);
 
@@ -681,7 +698,8 @@ document.addEventListener('DOMContentLoaded', () => {
           strainData: currentStrainData,
           isTwinActive,
           hrData: bluetoothManager.getHeartRateData(),
-          peerData: peerSync.getPeerData()
+          peerData: peerSync.getPeerData(),
+          wristMidpoint
         });
         return;
       }
@@ -954,6 +972,7 @@ document.addEventListener('DOMContentLoaded', () => {
           soundEngine.playSuccessChime();
           voiceCoach.speakPhrase(PhraseKey.REP_SUCCESS);
           bluetoothManager.adjustSimulatedBpm(3.5);
+          hapticEngine.triggerRepSuccess();
 
           completedReps.push({
             repNum: fsm.repCount,
@@ -992,6 +1011,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
           soundEngine.playFaultTone();
+          hapticEngine.triggerFormFault();
           if (activeExercise === 'SQUAT' || activeExercise === 'PUSHUP') {
             voiceCoach.speakPhrase(PhraseKey.CHEST_UP);
           }
@@ -1080,7 +1100,8 @@ document.addEventListener('DOMContentLoaded', () => {
       strainData: hasPose ? currentStrainData : null,
       isTwinActive,
       hrData: bluetoothManager.getHeartRateData(),
-      peerData: peerSync.getPeerData()
+      peerData: peerSync.getPeerData(),
+      wristMidpoint
     });
   });
 
@@ -1128,7 +1149,13 @@ document.addEventListener('DOMContentLoaded', () => {
     cadenceEngine.reset();
     strainEngine.reset();
     if (digitalTwin) digitalTwin.resetPose();
+    hudRenderer.clearWristHistory();
     rhythmGame.reset();
+
+    // Acquire Screen Wake Lock & Start Haptic confirmation
+    await wakeLockManager.requestWakeLock();
+    hapticEngine.triggerStart();
+    writeLog('🔒 [WAKE LOCK] Screen Display Guard Active.');
     
     // Reset state parameters
     stateMachine.reset();
@@ -1171,6 +1198,12 @@ document.addEventListener('DOMContentLoaded', () => {
     cadenceEngine.reset();
     strainEngine.reset();
     if (digitalTwin) digitalTwin.resetPose();
+    hudRenderer.clearWristHistory();
+
+    // Release Screen Wake Lock & trigger finish haptic
+    wakeLockManager.releaseWakeLock();
+    hapticEngine.triggerStop();
+    writeLog('🔓 [WAKE LOCK] Screen Display Guard Released.');
     
     // Halt session timer
     stopSessionTimer();

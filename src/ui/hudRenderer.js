@@ -69,6 +69,28 @@ export class HUDRenderer {
     this.logicalWidth = 640;
     /** @type {number} */
     this.logicalHeight = 480;
+
+    /** @type {Array<{ x: number, y: number, timestamp?: number }>} Rolling 60-frame wrist midpoint trajectory */
+    this.wristHistory = [];
+  }
+
+  /**
+   * Appends a wrist midpoint coordinate to the 60-frame rolling trajectory.
+   * @param {{ x: number, y: number }} point
+   */
+  addWristPoint(point) {
+    if (!point || typeof point.x !== 'number' || typeof point.y !== 'number') return;
+    this.wristHistory.push({ x: point.x, y: point.y, timestamp: performance.now() });
+    if (this.wristHistory.length > 60) {
+      this.wristHistory.shift();
+    }
+  }
+
+  /**
+   * Clears active wrist trajectory trail.
+   */
+  clearWristHistory() {
+    this.wristHistory = [];
   }
 
   /**
@@ -176,7 +198,9 @@ export class HUDRenderer {
     strainData = null,
     isTwinActive = false,
     hrData = null,
-    peerData = null
+    peerData = null,
+    wristMidpoint = null,
+    wristHistory = null
   }) {
     this.clear();
 
@@ -198,8 +222,16 @@ export class HUDRenderer {
     // 1. AR 3D Floor Perspective Grid (below feet)
     this._renderFloorGrid(landmarks, width, height, now);
 
-    // 2. Trailing Luminous Bar Path Ribbon (joint trajectory)
-    if (barPath && barPath.length > 1) {
+    // Record wrist midpoint if provided
+    if (wristMidpoint) {
+      this.addWristPoint(wristMidpoint);
+    }
+
+    // 2. Trailing Luminous Bar Path Ribbon (60-frame interactive barbell tracer)
+    const activeWristHistory = wristHistory || this.wristHistory;
+    if (activeWristHistory && activeWristHistory.length > 1) {
+      this.renderBarPath(activeWristHistory, width, height);
+    } else if (barPath && barPath.length > 1) {
       this._renderBarPath(barPath, width, height);
     }
 
@@ -1387,6 +1419,98 @@ export class HUDRenderer {
       ctx.shadowBlur = 12;
       ctx.shadowColor = HOLO_COLORS.CYAN;
       ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders 3D luminous neon barbell path ribbon connecting the past 60 frames of wrist midpoints.
+   * Color coding:
+   * - Cyan during vertical descent
+   * - Emerald on vertical ascent
+   * - Crimson if horizontal drift > 8% of frame width
+   * 
+   * @param {Array<{ x: number, y: number }>} [wristHistory]
+   * @param {number} [width]
+   * @param {number} [height]
+   */
+  renderBarPath(wristHistory = this.wristHistory, width = this.logicalWidth, height = this.logicalHeight) {
+    if (!wristHistory || wristHistory.length < 2) {
+      return;
+    }
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Compute baseline mean X to detect horizontal barbell drift (> 8% of frame width)
+    let sumX = 0;
+    for (let i = 0; i < wristHistory.length; i++) {
+      sumX += wristHistory[i].x;
+    }
+    const meanX = sumX / wristHistory.length;
+
+    let lastColor = HOLO_COLORS.CYAN;
+
+    for (let i = 1; i < wristHistory.length; i++) {
+      const pPrev = wristHistory[i - 1];
+      const pCurr = wristHistory[i];
+
+      const x1 = pPrev.x * width;
+      const y1 = pPrev.y * height;
+      const x2 = pCurr.x * width;
+      const y2 = pCurr.y * height;
+
+      const progress = i / wristHistory.length; // 0 (oldest) to 1 (newest)
+      const lineWidth = 1.5 + (progress * 4.5);
+
+      const dy = pCurr.y - pPrev.y; // Positive = downward (descent), Negative = upward (ascent)
+      const driftX = Math.abs(pCurr.x - meanX);
+
+      let strokeColor;
+      if (driftX > 0.08) {
+        // Horizontal drift > 8% frame width -> Warning Crimson
+        strokeColor = HOLO_COLORS.CRIMSON;
+      } else if (dy > 0.001) {
+        // Vertical descent -> Cyan
+        strokeColor = HOLO_COLORS.CYAN;
+      } else if (dy < -0.001) {
+        // Vertical ascent -> Emerald
+        strokeColor = HOLO_COLORS.MINT;
+      } else {
+        strokeColor = lastColor;
+      }
+      lastColor = strokeColor;
+
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineWidth = lineWidth;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = strokeColor;
+      ctx.shadowBlur = 10 * progress;
+      ctx.shadowColor = strokeColor;
+      ctx.stroke();
+    }
+
+    // Lead tracking point at current barbell wrist position
+    const lead = wristHistory[wristHistory.length - 1];
+    if (lead) {
+      const lx = lead.x * width;
+      const ly = lead.y * height;
+
+      ctx.beginPath();
+      ctx.arc(lx, ly, 4.5, 0, 2 * Math.PI);
+      ctx.fillStyle = HOLO_COLORS.WHITE;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = lastColor;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(lx, ly, 7.5, 0, 2 * Math.PI);
+      ctx.strokeStyle = lastColor;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
     }
 
     ctx.restore();
