@@ -200,7 +200,8 @@ export class HUDRenderer {
     hrData = null,
     peerData = null,
     wristMidpoint = null,
-    wristHistory = null
+    wristHistory = null,
+    smoothnessData = null
   }) {
     this.clear();
 
@@ -327,7 +328,159 @@ export class HUDRenderer {
       this._renderPeerGhostOverlay(peerData.landmarks, peerData.metadata, width, height, now);
     }
 
+    // 22. Motor Smoothness Index & Dimensionless Jerk Waveform
+    if (smoothnessData) {
+      this._renderSmoothnessGauge(smoothnessData, width, height, now);
+    }
+
     this.ctx.restore();
+  }
+
+  /**
+   * Renders the top-center Motor Smoothness circular gauge and real-time waveform.
+   * Flattens from a harmonic wave into an erratic jagged line when jerk exceeds thresholds.
+   * 
+   * @param {{ smoothnessScore: number, isJittery: boolean, dimensionlessJerk?: number }} smoothnessData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderSmoothnessGauge(smoothnessData, width, height, now) {
+    if (!smoothnessData) return;
+
+    const ctx = this.ctx;
+    const score = typeof smoothnessData.smoothnessScore === 'number'
+      ? Math.max(0, Math.min(100, Math.round(smoothnessData.smoothnessScore)))
+      : 100;
+    const isJittery = Boolean(smoothnessData.isJittery);
+
+    const cardW = 230;
+    const cardH = 36;
+    const x = (width - cardW) / 2;
+    const y = 14;
+
+    const themeColor = isJittery
+      ? HOLO_COLORS.CRIMSON
+      : (score >= 85 ? HOLO_COLORS.MINT : HOLO_COLORS.CYAN);
+
+    ctx.save();
+
+    // 1. Glassmorphic pill container
+    ctx.fillStyle = 'rgba(10, 15, 29, 0.85)';
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = isJittery ? 2.0 : 1.2;
+    ctx.shadowBlur = isJittery ? 14 : 8;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Circular Mini-Gauge on Left
+    const gaugeCenterX = x + 22;
+    const gaugeCenterY = y + (cardH / 2);
+    const gaugeRadius = 11;
+
+    // Track circle
+    ctx.beginPath();
+    ctx.arc(gaugeCenterX, gaugeCenterY, gaugeRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+
+    // Active progress arc
+    const startAngle = -0.5 * Math.PI;
+    const endAngle = startAngle + ((score / 100) * 2 * Math.PI);
+    ctx.beginPath();
+    ctx.arc(gaugeCenterX, gaugeCenterY, gaugeRadius, startAngle, endAngle);
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 2.8;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = isJittery ? 12 : 6;
+    ctx.shadowColor = themeColor;
+    ctx.stroke();
+
+    // Center pulse dot
+    const pulseDotScale = isJittery ? (Math.sin(now / 80) * 0.5 + 1.5) : 1.0;
+    ctx.beginPath();
+    ctx.arc(gaugeCenterX, gaugeCenterY, 3 * pulseDotScale, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.fill();
+
+    // 3. Smoothness Text & Metrics (Unmirrored for left-to-right reading)
+    const textCenterX = x + 88;
+    this._drawUnmirroredText(
+      'MOTOR SMOOTHNESS',
+      textCenterX,
+      y + 11,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      '#94a3b8',
+      'center'
+    );
+
+    const statusLabel = isJittery ? 'JITTER DETECTED' : `${score}/100`;
+    this._drawUnmirroredText(
+      `SMOOTHNESS: ${statusLabel}`,
+      textCenterX,
+      y + 24,
+      'bold 9px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    // 4. Kinetic Waveform / Oscilloscope on Right
+    const waveBoxX = x + 152;
+    const waveBoxY = y + 6;
+    const waveBoxW = 68;
+    const waveBoxH = cardH - 12;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(waveBoxX, waveBoxY, waveBoxW, waveBoxH);
+    ctx.clip();
+
+    ctx.beginPath();
+    const waveCenterY = waveBoxY + (waveBoxH / 2);
+
+    if (isJittery) {
+      // Erratic, jagged line with high-frequency spikes when jerk exceeds threshold
+      for (let i = 0; i <= waveBoxW; i += 3) {
+        const px = waveBoxX + i;
+        const spike = Math.sin((i * 1.7) + (now / 35)) * 6.5
+          + Math.cos((i * 3.1) - (now / 20)) * 3.5;
+        const py = waveCenterY + Math.max(-11, Math.min(11, spike));
+        if (i === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.strokeStyle = HOLO_COLORS.CRIMSON;
+      ctx.lineWidth = 1.8;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = HOLO_COLORS.CRIMSON;
+    } else {
+      // Subtle, harmonic sine wave pulse
+      for (let i = 0; i <= waveBoxW; i += 2) {
+        const px = waveBoxX + i;
+        const py = waveCenterY + Math.sin((i / 8) + (now / 180)) * 4.5;
+        if (i === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.strokeStyle = themeColor;
+      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = themeColor;
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
   }
 
   /**

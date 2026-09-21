@@ -32,6 +32,8 @@ import { BluetoothManager } from './iot/bluetoothManager.js';
 import { PeerSync } from './network/peerSync.js';
 import { WakeLockManager } from './core/wakeLockManager.js';
 import { HapticEngine } from './core/hapticEngine.js';
+import { SmoothnessEngine } from './core/smoothnessEngine.js';
+import { SonificationSynth } from './logic/sonificationSynth.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -113,6 +115,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const peerSync = new PeerSync();
   const wakeLockManager = new WakeLockManager();
   const hapticEngine = new HapticEngine();
+  const smoothnessEngine = new SmoothnessEngine();
+  const sonificationSynth = new SonificationSynth();
   let isTwinActive = true;
   let currentStrainData = null;
 
@@ -486,6 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
     strainEngine.reset();
     if (digitalTwin) digitalTwin.resetPose();
     hudRenderer.clearWristHistory();
+    smoothnessEngine.reset();
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -699,7 +704,8 @@ document.addEventListener('DOMContentLoaded', () => {
           isTwinActive,
           hrData: bluetoothManager.getHeartRateData(),
           peerData: peerSync.getPeerData(),
-          wristMidpoint
+          wristMidpoint,
+          smoothnessData: smoothnessEngine.getSmoothness()
         });
         return;
       }
@@ -905,6 +911,27 @@ document.addEventListener('DOMContentLoaded', () => {
         barPath = biomechanicsEngine.trackBarPath(selectedVertex, velocity);
       }
 
+      // Movement Smoothness & Dimensionless Jerk Engine
+      let smoothnessResult = null;
+      if (selectedVertex || wristMidpoint) {
+        const trackingY = wristMidpoint ? wristMidpoint.y : selectedVertex.y;
+        const isConcentric = fsm && (fsm.currentState === 'IN_PROGRESS' || fsm.currentState === 'VALIDATED_SUCCESS');
+        smoothnessResult = smoothnessEngine.update(trackingY, performance.now(), isConcentric);
+      }
+
+      // Continuous Auditory Sonification Stream
+      if (isTrackingActive && sonificationSynth.isPlaying) {
+        let targetDepthAngle = 90;
+        if (activeExercise === 'SQUAT') {
+          targetDepthAngle = EXERCISE_RULES.SQUAT.thresholds.depthMax;
+        } else if (activeExercise === 'PUSHUP') {
+          targetDepthAngle = EXERCISE_RULES.PUSHUP.thresholds.depthMax;
+        } else if (activeExercise === 'BICEP_CURL') {
+          targetDepthAngle = EXERCISE_RULES.BICEP_CURL.thresholds.contractionMax;
+        }
+        sonificationSynth.updateStream(currentAngle, targetDepthAngle, fsm.hasFault);
+      }
+
       // 4. Gated State Machine & Cadence execution (Only active when calibrated)
       if (calibrationResult && calibrationResult.isSteadyCalibrated) {
         fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline, lateralBalanceDelta);
@@ -1007,6 +1034,7 @@ document.addEventListener('DOMContentLoaded', () => {
           currentRepHasFault = false;
           currentRepMinAngle = 180;
           initiatedRep = false;
+          smoothnessEngine.resetConcentric();
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1101,7 +1129,8 @@ document.addEventListener('DOMContentLoaded', () => {
       isTwinActive,
       hrData: bluetoothManager.getHeartRateData(),
       peerData: peerSync.getPeerData(),
-      wristMidpoint
+      wristMidpoint,
+      smoothnessData: smoothnessResult || smoothnessEngine.getSmoothness()
     });
   });
 
@@ -1150,6 +1179,8 @@ document.addEventListener('DOMContentLoaded', () => {
     strainEngine.reset();
     if (digitalTwin) digitalTwin.resetPose();
     hudRenderer.clearWristHistory();
+    smoothnessEngine.reset();
+    sonificationSynth.start();
     rhythmGame.reset();
 
     // Acquire Screen Wake Lock & Start Haptic confirmation
@@ -1199,6 +1230,8 @@ document.addEventListener('DOMContentLoaded', () => {
     strainEngine.reset();
     if (digitalTwin) digitalTwin.resetPose();
     hudRenderer.clearWristHistory();
+    smoothnessEngine.reset();
+    sonificationSynth.stop();
 
     // Release Screen Wake Lock & trigger finish haptic
     wakeLockManager.releaseWakeLock();
