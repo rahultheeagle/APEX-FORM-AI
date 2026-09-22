@@ -201,7 +201,9 @@ export class HUDRenderer {
     peerData = null,
     wristMidpoint = null,
     wristHistory = null,
-    smoothnessData = null
+    smoothnessData = null,
+    perspectiveData = null,
+    workData = null
   }) {
     this.clear();
 
@@ -331,6 +333,16 @@ export class HUDRenderer {
     // 22. Motor Smoothness Index & Dimensionless Jerk Waveform
     if (smoothnessData) {
       this._renderSmoothnessGauge(smoothnessData, width, height, now);
+    }
+
+    // 23. Perspective Horizon Reticle (Camera Tilt Level)
+    if (perspectiveData) {
+      this._renderHorizonReticle(perspectiveData, width, height, now);
+    }
+
+    // 24. Cyber Kinetic Energy Battery Cell (Top-Left HUD)
+    if (workData) {
+      this._renderEnergyBattery(workData, width, height, now);
     }
 
     this.ctx.restore();
@@ -479,6 +491,216 @@ export class HUDRenderer {
     }
     ctx.stroke();
     ctx.restore();
+
+    ctx.restore();
+  }
+
+  /**
+   * Draws an ambient cybernetic horizon reticle indicating mobile device pitch tilt.
+   * 
+   * @param {{ pitchAngleDeg: number, isOptimal: boolean }} perspectiveData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderHorizonReticle(perspectiveData, width, height, now) {
+    if (!perspectiveData) return;
+
+    const ctx = this.ctx;
+    const pitchDeg = typeof perspectiveData.pitchAngleDeg === 'number'
+      ? perspectiveData.pitchAngleDeg
+      : (typeof perspectiveData === 'number' ? perspectiveData : 0);
+    const isOptimal = perspectiveData.isOptimal !== undefined
+      ? perspectiveData.isOptimal
+      : Math.abs(pitchDeg) <= 3.0;
+
+    const themeColor = isOptimal ? HOLO_COLORS.MINT : (Math.abs(pitchDeg) > 10 ? HOLO_COLORS.AMBER : HOLO_COLORS.CYAN);
+
+    const centerX = width / 2;
+    const centerY = height * 0.46;
+    const pitchOffset = Math.max(-40, Math.min(40, pitchDeg * 2.2));
+
+    ctx.save();
+
+    // 1. Subtle central reticle circle & crosshairs
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.fill();
+
+    // 2. Horizon Pitch Wings (shifted by camera tilt)
+    const horizonY = centerY + pitchOffset;
+    const wingLength = 48;
+    const wingGap = 16;
+
+    // Left wing
+    ctx.beginPath();
+    ctx.moveTo(centerX - wingGap - wingLength, horizonY);
+    ctx.lineTo(centerX - wingGap, horizonY);
+    ctx.lineTo(centerX - wingGap, horizonY + (pitchDeg >= 0 ? 5 : -5));
+    // Right wing
+    ctx.moveTo(centerX + wingGap + wingLength, horizonY);
+    ctx.lineTo(centerX + wingGap, horizonY);
+    ctx.lineTo(centerX + wingGap, horizonY + (pitchDeg >= 0 ? 5 : -5));
+
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = isOptimal ? 1.8 : 1.2;
+    ctx.shadowBlur = isOptimal ? 10 : 4;
+    ctx.shadowColor = themeColor;
+    ctx.stroke();
+
+    // 3. Subtle pitch ladder markings (+10°, -10°)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 0;
+    // +10 ladder
+    ctx.beginPath();
+    ctx.moveTo(centerX - 18, centerY - 22);
+    ctx.lineTo(centerX - 6, centerY - 22);
+    ctx.moveTo(centerX + 6, centerY - 22);
+    ctx.lineTo(centerX + 18, centerY - 22);
+    // -10 ladder
+    ctx.moveTo(centerX - 18, centerY + 22);
+    ctx.lineTo(centerX - 6, centerY + 22);
+    ctx.moveTo(centerX + 6, centerY + 22);
+    ctx.lineTo(centerX + 18, centerY + 22);
+    ctx.stroke();
+
+    // 4. Digital Pitch Readout Pill (unmirrored)
+    const pillW = 130;
+    const pillH = 16;
+    const pillX = centerX - (pillW / 2);
+    const pillY = centerY + 30;
+
+    ctx.fillStyle = 'rgba(10, 15, 29, 0.70)';
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = themeColor;
+    this._drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    const sign = pitchDeg > 0 ? '+' : '';
+    const label = isOptimal ? 'HORIZON: 0° OPTIMAL' : `TILT: ${sign}${pitchDeg.toFixed(1)}°`;
+    this._drawUnmirroredText(
+      label,
+      centerX,
+      pillY + (pillH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Cyber Kinetic Energy Battery Cell in the top-left HUD.
+   * Displays cumulative kJ and peak Watts, and emits an intense emerald pulse on rep completion.
+   * 
+   * @param {{ instantWatts: number, cumulativeKilojoules: number, peakWatts: number, repPulse: boolean }} workData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderEnergyBattery(workData, width, height, now) {
+    if (!workData) return;
+
+    const ctx = this.ctx;
+    const kj = typeof workData.cumulativeKilojoules === 'number' ? workData.cumulativeKilojoules : 0;
+    const peakWatts = typeof workData.peakWatts === 'number' ? workData.peakWatts : 0;
+    const instantWatts = typeof workData.instantWatts === 'number' ? workData.instantWatts : 0;
+    const repPulse = Boolean(workData.repPulse);
+
+    const cardW = 210;
+    const cardH = 46;
+    // Positioned at (width - cardW - 20) on canvas so it displays on visual TOP-LEFT of mirrored screen
+    const x = width - cardW - 20;
+    const y = 20;
+
+    ctx.save();
+
+    const pulseGlow = repPulse ? (Math.sin(now / 80) * 0.3 + 0.7) : 0;
+    const borderColor = repPulse ? `rgba(0, 255, 135, ${pulseGlow})` : 'rgba(0, 242, 254, 0.4)';
+    const shadowColor = repPulse ? HOLO_COLORS.MINT : HOLO_COLORS.CYAN;
+
+    // 1. Glassmorphic Card Backing
+    ctx.fillStyle = repPulse
+      ? `rgba(0, 255, 135, ${0.12 * pulseGlow})`
+      : 'rgba(10, 15, 29, 0.85)';
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = repPulse ? 2.0 : 1.2;
+    ctx.shadowBlur = repPulse ? 18 : 8;
+    ctx.shadowColor = shadowColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Header Text: ENERGY: 14.2 kJ | 380W PEAK (unmirrored)
+    const textCenterX = x + (cardW / 2);
+    this._drawUnmirroredText(
+      `ENERGY: ${kj.toFixed(1)} kJ | ${peakWatts}W PEAK`,
+      textCenterX,
+      y + 12,
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      repPulse ? HOLO_COLORS.MINT : HOLO_COLORS.WHITE,
+      'center'
+    );
+
+    // 3. Segmented Kinetic Energy Battery Cells
+    const batteryX = x + 12;
+    const batteryY = y + 23;
+    const batteryW = cardW - 32;
+    const batteryH = 14;
+
+    // Outer battery frame
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 0;
+    this._drawRoundedRect(ctx, batteryX, batteryY, batteryW, batteryH, 3);
+    ctx.stroke();
+
+    // Positive terminal nipple
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    this._drawRoundedRect(ctx, batteryX + batteryW + 1, batteryY + 3.5, 3, 7, 1);
+    ctx.fill();
+
+    // 10 Segments
+    const numSegments = 10;
+    const segmentGap = 2;
+    const segmentW = (batteryW - 4 - ((numSegments - 1) * segmentGap)) / numSegments;
+    const fillRatio = Math.max(0.08, Math.min(1.0, kj > 0 ? (kj / 20) : (instantWatts > 0 ? 0.2 : 0.05)));
+    const activeSegments = Math.ceil(fillRatio * numSegments);
+
+    for (let i = 0; i < numSegments; i++) {
+      const segX = batteryX + 2 + (i * (segmentW + segmentGap));
+      const segY = batteryY + 2;
+      const segH = batteryH - 4;
+
+      if (i < activeSegments) {
+        ctx.fillStyle = repPulse
+          ? HOLO_COLORS.MINT
+          : (i >= 8 ? HOLO_COLORS.MAGENTA : (i >= 5 ? HOLO_COLORS.CYAN : HOLO_COLORS.MINT));
+        ctx.shadowBlur = repPulse ? 10 : (i === activeSegments - 1 ? 6 : 0);
+        ctx.shadowColor = ctx.fillStyle;
+      } else {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+        ctx.shadowBlur = 0;
+      }
+
+      this._drawRoundedRect(ctx, segX, segY, segmentW, segH, 1.5);
+      ctx.fill();
+    }
 
     ctx.restore();
   }

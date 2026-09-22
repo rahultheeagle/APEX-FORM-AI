@@ -34,6 +34,8 @@ import { WakeLockManager } from './core/wakeLockManager.js';
 import { HapticEngine } from './core/hapticEngine.js';
 import { SmoothnessEngine } from './core/smoothnessEngine.js';
 import { SonificationSynth } from './logic/sonificationSynth.js';
+import { PerspectiveCalibrator } from './core/perspectiveCalibrator.js';
+import { WorkEngine } from './core/workEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -117,6 +119,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const hapticEngine = new HapticEngine();
   const smoothnessEngine = new SmoothnessEngine();
   const sonificationSynth = new SonificationSynth();
+  const perspectiveCalibrator = new PerspectiveCalibrator();
+  const workEngine = new WorkEngine();
+  let lastFrameTimestamp = 0;
   let isTwinActive = true;
   let currentStrainData = null;
 
@@ -491,6 +496,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (digitalTwin) digitalTwin.resetPose();
     hudRenderer.clearWristHistory();
     smoothnessEngine.reset();
+    perspectiveCalibrator.reset();
+    workEngine.reset();
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -587,15 +594,26 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (hasPose) {
+      // Ground Perspective Auto-Calibration & Camera Tilt Rectification
+      perspectiveCalibrator.estimateCameraPitch(landmarks);
+      const rectifiedLandmarks = perspectiveCalibrator.rectifyLandmarks(landmarks);
+      const activeLandmarks = rectifiedLandmarks || landmarks;
+
+      // Real-time Mechanical Work (kJ) and Instantaneous Power Output (Watts)
+      const nowMs = performance.now();
+      const dtSec = lastFrameTimestamp ? Math.max(0.005, Math.min(0.2, (nowMs - lastFrameTimestamp) / 1000)) : (1 / 60);
+      lastFrameTimestamp = nowMs;
+      const workData = workEngine.accumulateWork(activeLandmarks, null, dtSec, 75);
+
       // 0. Dynamic Exercise Classification & Center-of-Mass Vector
       if (isTrackingActive && !isTrackingPaused) {
-        const classification = exerciseClassifier.classifyPose(landmarks);
+        const classification = exerciseClassifier.classifyPose(activeLandmarks);
         if (classification.hasChanged) {
           switchExercise(classification.currentExercise, true);
         }
       }
 
-      centerOfMass = biomechanicsEngine.calculateCenterOfMass(landmarks);
+      centerOfMass = biomechanicsEngine.calculateCenterOfMass(activeLandmarks);
 
       // Kinetic Joint Torques & 3D Spatial Digital Twin Mirroring
       currentStrainData = strainEngine.computeJointTorques(worldLandmarks, activeExercise);
@@ -705,7 +723,9 @@ document.addEventListener('DOMContentLoaded', () => {
           hrData: bluetoothManager.getHeartRateData(),
           peerData: peerSync.getPeerData(),
           wristMidpoint,
-          smoothnessData: smoothnessEngine.getSmoothness()
+          smoothnessData: smoothnessEngine.getSmoothness(),
+          perspectiveData: { pitchAngleDeg: perspectiveCalibrator.getPitchDegrees(), isOptimal: perspectiveCalibrator.isOptimal() },
+          workData: workEngine.getWork()
         });
         return;
       }
@@ -718,15 +738,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (activeExercise === 'SQUAT') {
         const joints = EXERCISE_RULES.SQUAT.joints;
 
-        const hipL = landmarks[joints.hipLeft];
-        const kneeL = landmarks[joints.kneeLeft];
-        const ankleL = landmarks[joints.ankleLeft];
-        const shoulderL = landmarks[joints.shoulderLeft];
+        const hipL = activeLandmarks[joints.hipLeft];
+        const kneeL = activeLandmarks[joints.kneeLeft];
+        const ankleL = activeLandmarks[joints.ankleLeft];
+        const shoulderL = activeLandmarks[joints.shoulderLeft];
 
-        const hipR = landmarks[joints.hipRight];
-        const kneeR = landmarks[joints.kneeRight];
-        const ankleR = landmarks[joints.ankleRight];
-        const shoulderR = landmarks[joints.shoulderRight];
+        const hipR = activeLandmarks[joints.hipRight];
+        const kneeR = activeLandmarks[joints.kneeRight];
+        const ankleR = activeLandmarks[joints.ankleRight];
+        const shoulderR = activeLandmarks[joints.shoulderRight];
 
         if (hipL && kneeL && ankleL && hipL.visibility > 0.4 && kneeL.visibility > 0.4 && ankleL.visibility > 0.4) {
           angleL = calculate3DAngle(hipL, kneeL, ankleL);
@@ -786,13 +806,13 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (activeExercise === 'BICEP_CURL') {
         const joints = EXERCISE_RULES.BICEP_CURL.joints;
 
-        const shoulderL = landmarks[joints.shoulderLeft];
-        const elbowL = landmarks[joints.elbowLeft];
-        const wristL = landmarks[joints.wristLeft];
+        const shoulderL = activeLandmarks[joints.shoulderLeft];
+        const elbowL = activeLandmarks[joints.elbowLeft];
+        const wristL = activeLandmarks[joints.wristLeft];
 
-        const shoulderR = landmarks[joints.shoulderRight];
-        const elbowR = landmarks[joints.elbowRight];
-        const wristR = landmarks[joints.wristRight];
+        const shoulderR = activeLandmarks[joints.shoulderRight];
+        const elbowR = activeLandmarks[joints.elbowRight];
+        const wristR = activeLandmarks[joints.wristRight];
 
         if (shoulderL && elbowL && wristL && shoulderL.visibility > 0.4 && elbowL.visibility > 0.4 && wristL.visibility > 0.4) {
           angleL = calculate3DAngle(shoulderL, elbowL, wristL);
@@ -837,13 +857,13 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (activeExercise === 'PUSHUP') {
         const joints = EXERCISE_RULES.PUSHUP.joints;
 
-        const shoulderL = landmarks[joints.shoulderLeft];
-        const elbowL = landmarks[joints.elbowLeft];
-        const wristL = landmarks[joints.wristLeft];
+        const shoulderL = activeLandmarks[joints.shoulderLeft];
+        const elbowL = activeLandmarks[joints.elbowLeft];
+        const wristL = activeLandmarks[joints.wristLeft];
 
-        const shoulderR = landmarks[joints.shoulderRight];
-        const elbowR = landmarks[joints.elbowRight];
-        const wristR = landmarks[joints.wristRight];
+        const shoulderR = activeLandmarks[joints.shoulderRight];
+        const elbowR = activeLandmarks[joints.elbowRight];
+        const wristR = activeLandmarks[joints.wristRight];
 
         if (shoulderL && elbowL && wristL && shoulderL.visibility > 0.4 && elbowL.visibility > 0.4 && wristL.visibility > 0.4) {
           angleL = calculate3DAngle(shoulderL, elbowL, wristL);
@@ -1035,6 +1055,7 @@ document.addEventListener('DOMContentLoaded', () => {
           currentRepMinAngle = 180;
           initiatedRep = false;
           smoothnessEngine.resetConcentric();
+          workEngine.triggerRepPulse();
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1130,7 +1151,9 @@ document.addEventListener('DOMContentLoaded', () => {
       hrData: bluetoothManager.getHeartRateData(),
       peerData: peerSync.getPeerData(),
       wristMidpoint,
-      smoothnessData: smoothnessResult || smoothnessEngine.getSmoothness()
+      smoothnessData: smoothnessResult || smoothnessEngine.getSmoothness(),
+      perspectiveData: { pitchAngleDeg: perspectiveCalibrator.getPitchDegrees(), isOptimal: perspectiveCalibrator.isOptimal() },
+      workData: workEngine.getWork()
     });
   });
 
@@ -1180,6 +1203,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (digitalTwin) digitalTwin.resetPose();
     hudRenderer.clearWristHistory();
     smoothnessEngine.reset();
+    perspectiveCalibrator.reset();
+    workEngine.reset();
     sonificationSynth.start();
     rhythmGame.reset();
 
@@ -1231,6 +1256,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (digitalTwin) digitalTwin.resetPose();
     hudRenderer.clearWristHistory();
     smoothnessEngine.reset();
+    perspectiveCalibrator.reset();
+    workEngine.reset();
     sonificationSynth.stop();
 
     // Release Screen Wake Lock & trigger finish haptic
@@ -1341,8 +1368,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const barPathEval = biomechanicsEngine.evaluateBarPathConsistency(fullSessionPath);
     const avgSymmetry = symmetrySamples.length > 0 ?
       Number((symmetrySamples.reduce((a, b) => a + b, 0) / symmetrySamples.length).toFixed(1)) : 98.4;
-    const mechanicalWork = biomechanicsEngine.calculateMechanicalWork(totalRepsCount, activeExercise);
+    const workSnapshot = workEngine.getWork();
+    const mechanicalWork = workSnapshot.cumulativeKilojoules > 0
+      ? {
+          joules: Math.round(workSnapshot.cumulativeJoules),
+          kcal: Number((workSnapshot.cumulativeJoules * 0.000239006).toFixed(1))
+        }
+      : biomechanicsEngine.calculateMechanicalWork(totalRepsCount, activeExercise);
     const durationSeconds = Math.round((Date.now() - (sessionStartTime || Date.now())) / 1000);
+    writeLog(`⚡ [WORK] Cumulative Mechanical Work: ${(mechanicalWork.joules / 1000).toFixed(1)} kJ (${mechanicalWork.kcal} kcal) | Peak: ${workSnapshot.peakWatts}W`);
 
     // Stop all WebRTC tracks and frame loops
     stopTracking();
