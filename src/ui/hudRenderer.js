@@ -203,7 +203,9 @@ export class HUDRenderer {
     wristHistory = null,
     smoothnessData = null,
     perspectiveData = null,
-    workData = null
+    workData = null,
+    laserConstraints = null,
+    rppgData = null
   }) {
     this.clear();
 
@@ -343,6 +345,16 @@ export class HUDRenderer {
     // 24. Cyber Kinetic Energy Battery Cell (Top-Left HUD)
     if (workData) {
       this._renderEnergyBattery(workData, width, height, now);
+    }
+
+    // 25. AR Spatial Laser Constraints & Movement Corridor Boundaries
+    if (laserConstraints) {
+      this._renderLaserConstraints(laserConstraints, width, height, now);
+    }
+
+    // 26. Rest-Mode Facial Optical Pulse (rPPG) Telemetry Card & Forehead Reticle
+    if (rppgData && (rppgData.bpm > 0 || rppgData.faceBox)) {
+      this._renderRPPGCard(rppgData, width, height, now);
     }
 
     this.ctx.restore();
@@ -702,6 +714,298 @@ export class HUDRenderer {
       ctx.fill();
     }
 
+    ctx.restore();
+  }
+
+  /**
+   * Renders glowing translucent AR laser boundary constraint planes and breach alerts.
+   * 
+   * @param {{ walls?: Array<Object>, isBreached?: boolean, penance?: string, getWalls?: Function }} constraintData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderLaserConstraints(constraintData, width, height, now) {
+    if (!constraintData) return;
+
+    const walls = constraintData.walls || (constraintData.getWalls ? constraintData.getWalls() : []);
+    if (!walls || walls.length === 0) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    for (let i = 0; i < walls.length; i++) {
+      const wall = walls[i];
+      const isBreached = Boolean(wall.isBreached);
+      const color = isBreached ? HOLO_COLORS.CRIMSON : HOLO_COLORS.CYAN;
+      const alphaPulse = isBreached ? (Math.sin(now / 70) * 0.15 + 0.35) : 0.15;
+
+      if (wall.axis === 'x') {
+        const wallX = wall.limitValue * width;
+        const dirSign = wall.direction === 'greater' ? 1 : -1;
+        const planeDepth = 40;
+
+        // 1. Translucent AR Laser Plane
+        const grad = ctx.createLinearGradient(wallX, 0, wallX + (dirSign * planeDepth), 0);
+        grad.addColorStop(0, isBreached ? `rgba(255, 0, 85, ${alphaPulse})` : 'rgba(0, 242, 254, 0.20)');
+        grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.fillStyle = grad;
+        const rectLeft = dirSign > 0 ? wallX : wallX - planeDepth;
+        ctx.fillRect(rectLeft, 0, planeDepth, height);
+
+        // 2. Luminous Core Laser Wall
+        ctx.beginPath();
+        ctx.moveTo(wallX, 0);
+        ctx.lineTo(wallX, height);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isBreached ? 3.0 : 1.5;
+        ctx.shadowBlur = isBreached ? 18 : 8;
+        ctx.shadowColor = color;
+        ctx.stroke();
+
+        // 3. Cyber Hazard Cross-Ticks along the wall
+        ctx.lineWidth = 1.0;
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = isBreached ? 'rgba(255, 0, 85, 0.7)' : 'rgba(0, 242, 254, 0.4)';
+        for (let ty = 30; ty < height; ty += 45) {
+          ctx.beginPath();
+          ctx.moveTo(wallX - 4, ty);
+          ctx.lineTo(wallX + 4, ty);
+          ctx.stroke();
+        }
+
+        // 4. Boundary Label Tag (unmirrored)
+        this._drawUnmirroredText(
+          wall.label,
+          wallX + (dirSign * 8),
+          height * 0.22 + (i * 14),
+          'bold 7.5px "Orbitron", -apple-system, sans-serif',
+          color,
+          dirSign > 0 ? 'left' : 'right'
+        );
+      } else if (wall.axis === 'y') {
+        const wallY = wall.limitValue * height;
+        const dirSign = wall.direction === 'greater' ? 1 : -1;
+        const planeDepth = 32;
+
+        const grad = ctx.createLinearGradient(0, wallY, 0, wallY + (dirSign * planeDepth));
+        grad.addColorStop(0, isBreached ? `rgba(255, 0, 85, ${alphaPulse})` : 'rgba(0, 242, 254, 0.20)');
+        grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.fillStyle = grad;
+        const rectTop = dirSign > 0 ? wallY : wallY - planeDepth;
+        ctx.fillRect(0, rectTop, width, planeDepth);
+
+        ctx.beginPath();
+        ctx.moveTo(0, wallY);
+        ctx.lineTo(width, wallY);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isBreached ? 3.0 : 1.5;
+        ctx.shadowBlur = isBreached ? 16 : 8;
+        ctx.shadowColor = color;
+        ctx.stroke();
+
+        this._drawUnmirroredText(
+          wall.label,
+          width * 0.5,
+          wallY - 8,
+          'bold 7.5px "Orbitron", -apple-system, sans-serif',
+          color,
+          'center'
+        );
+      }
+    }
+
+    // 5. Breached Penance Banner
+    if (constraintData.isBreached && constraintData.penance) {
+      const bannerW = Math.min(380, width * 0.88);
+      const bannerH = 28;
+      const bx = (width - bannerW) / 2;
+      const by = height - 96;
+
+      const alertPulse = Math.sin(now / 100) * 0.15 + 0.85;
+
+      ctx.fillStyle = `rgba(255, 0, 85, ${0.88 * alertPulse})`;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = HOLO_COLORS.CRIMSON;
+
+      this._drawRoundedRect(ctx, bx, by, bannerW, bannerH, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      this._drawUnmirroredText(
+        `⚠️ ${constraintData.penance.toUpperCase()}`,
+        bx + (bannerW / 2),
+        by + (bannerH / 2),
+        'bold 8.5px "Orbitron", -apple-system, sans-serif',
+        HOLO_COLORS.WHITE,
+        'center'
+      );
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the ambient Rest-Mode facial optical pulse (rPPG) telemetry card and forehead tracking reticle.
+   * 
+   * @param {{ bpm: number, confidence: number, rawWave: number, isRecovering: boolean, faceBox: Object|null, waveHistory: number[] }} rppgData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderRPPGCard(rppgData, width, height, now) {
+    if (!rppgData) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    // 1. Forehead Scan Reticle Brackets on video stream
+    if (rppgData.faceBox) {
+      const fb = rppgData.faceBox;
+      const bw = fb.width * width;
+      const bh = fb.height * height;
+      const bx = (fb.x * width) - (bw / 2);
+      const by = (fb.y * height) - (bh / 2);
+      const cornerLen = 7;
+
+      ctx.strokeStyle = HOLO_COLORS.CYAN;
+      ctx.lineWidth = 1.6;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = HOLO_COLORS.CYAN;
+
+      // Top-left
+      ctx.beginPath();
+      ctx.moveTo(bx, by + cornerLen);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(bx + cornerLen, by);
+      ctx.stroke();
+
+      // Top-right
+      ctx.beginPath();
+      ctx.moveTo(bx + bw - cornerLen, by);
+      ctx.lineTo(bx + bw, by);
+      ctx.lineTo(bx + bw, by + cornerLen);
+      ctx.stroke();
+
+      // Bottom-left
+      ctx.beginPath();
+      ctx.moveTo(bx, by + bh - cornerLen);
+      ctx.lineTo(bx, by + bh);
+      ctx.lineTo(bx + cornerLen, by + bh);
+      ctx.stroke();
+
+      // Bottom-right
+      ctx.beginPath();
+      ctx.moveTo(bx + bw - cornerLen, by + bh);
+      ctx.lineTo(bx + bw, by + bh);
+      ctx.lineTo(bx + bw, by + bh - cornerLen);
+      ctx.stroke();
+
+      this._drawUnmirroredText(
+        '[ SCANNING rPPG ]',
+        bx + (bw / 2),
+        by - 8,
+        'bold 6.5px "Orbitron", -apple-system, sans-serif',
+        HOLO_COLORS.CYAN,
+        'center'
+      );
+    }
+
+    // 2. Ambient Rest-Mode Telemetry Card
+    const cardW = 210;
+    const cardH = 68;
+    const x = 20;
+    const y = 62;
+
+    const isRecovering = Boolean(rppgData.isRecovering);
+    const themeColor = isRecovering ? HOLO_COLORS.MINT : HOLO_COLORS.CYAN;
+    const statusText = isRecovering
+      ? 'RECOVERY DETECTED'
+      : (rppgData.confidence > 0.4 ? 'STABILIZING' : 'SCANNING PULSE...');
+
+    ctx.fillStyle = 'rgba(10, 15, 29, 0.88)';
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = isRecovering ? 1.8 : 1.2;
+    ctx.shadowBlur = isRecovering ? 12 : 8;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 3. Card Header Tag (unmirrored)
+    this._drawUnmirroredText(
+      '❤️ OPTICAL PULSE (rPPG)',
+      x + 12,
+      y + 11,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      '#94a3b8',
+      'left'
+    );
+
+    // 4. BPM & Recovery Status Readout
+    const bpmDisplay = (rppgData.bpm && rppgData.bpm > 0) ? rppgData.bpm : '--';
+    this._drawUnmirroredText(
+      `HR: ${bpmDisplay} BPM [${statusText}]`,
+      x + 12,
+      y + 24,
+      'bold 8.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    // 5. Real-Time Oscilloscope Pulse Waveform
+    const waveBoxX = x + 10;
+    const waveBoxY = y + 36;
+    const waveBoxW = cardW - 20;
+    const waveBoxH = 24;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(waveBoxX, waveBoxY, waveBoxW, waveBoxH);
+    ctx.clip();
+
+    // Background waveform grid lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.moveTo(waveBoxX, waveBoxY + (waveBoxH / 2));
+    ctx.lineTo(waveBoxX + waveBoxW, waveBoxY + (waveBoxH / 2));
+    ctx.stroke();
+
+    const history = rppgData.waveHistory || [];
+    if (history.length > 2) {
+      const step = waveBoxW / Math.max(1, history.length - 1);
+      const waveMidY = waveBoxY + (waveBoxH / 2);
+
+      ctx.beginPath();
+      for (let i = 0; i < history.length; i++) {
+        const px = waveBoxX + (i * step);
+        const amp = Math.max(-10, Math.min(10, history[i] * 3.2));
+        const py = waveMidY - amp;
+
+        if (i === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+
+      ctx.strokeStyle = themeColor;
+      ctx.lineWidth = 1.6;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = themeColor;
+      ctx.stroke();
+    }
+
+    ctx.restore();
     ctx.restore();
   }
 

@@ -36,6 +36,8 @@ import { SmoothnessEngine } from './core/smoothnessEngine.js';
 import { SonificationSynth } from './logic/sonificationSynth.js';
 import { PerspectiveCalibrator } from './core/perspectiveCalibrator.js';
 import { WorkEngine } from './core/workEngine.js';
+import { RPPGEngine } from './core/rppgEngine.js';
+import { LaserConstraints } from './ui/laserConstraints.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -121,6 +123,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const sonificationSynth = new SonificationSynth();
   const perspectiveCalibrator = new PerspectiveCalibrator();
   const workEngine = new WorkEngine();
+  const rppgEngine = new RPPGEngine();
+  const laserConstraints = new LaserConstraints();
   let lastFrameTimestamp = 0;
   let isTwinActive = true;
   let currentStrainData = null;
@@ -498,6 +502,8 @@ document.addEventListener('DOMContentLoaded', () => {
     smoothnessEngine.reset();
     perspectiveCalibrator.reset();
     workEngine.reset();
+    laserConstraints.reset();
+    rppgEngine.reset();
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -725,7 +731,9 @@ document.addEventListener('DOMContentLoaded', () => {
           wristMidpoint,
           smoothnessData: smoothnessEngine.getSmoothness(),
           perspectiveData: { pitchAngleDeg: perspectiveCalibrator.getPitchDegrees(), isOptimal: perspectiveCalibrator.isOptimal() },
-          workData: workEngine.getWork()
+          workData: workEngine.getWork(),
+          laserConstraints: null,
+          rppgData: (webcam && webcam.readyState >= webcam.HAVE_CURRENT_DATA) ? rppgEngine.sampleFaceRegion(webcam, landmarks) : null
         });
         return;
       }
@@ -933,6 +941,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Movement Smoothness & Dimensionless Jerk Engine
       let smoothnessResult = null;
+      let rppgResult = null;
       if (selectedVertex || wristMidpoint) {
         const trackingY = wristMidpoint ? wristMidpoint.y : selectedVertex.y;
         const isConcentric = fsm && (fsm.currentState === 'IN_PROGRESS' || fsm.currentState === 'VALIDATED_SUCCESS');
@@ -956,6 +965,26 @@ document.addEventListener('DOMContentLoaded', () => {
       if (calibrationResult && calibrationResult.isSteadyCalibrated) {
         fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline, lateralBalanceDelta);
         cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
+
+        // AR Spatial Laser Constraints & Movement Corridor Enforcement
+        if (!laserConstraints.isAutoCalibrated) {
+          laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
+        }
+
+        const isRestInterval = (!isTrackingActive) || isTrackingPaused || fsm.currentState === 'IDLE';
+
+        if (!isRestInterval) {
+          // Active exercise set: enforce spatial laser boundary constraints
+          const laserViolation = laserConstraints.checkViolations(activeLandmarks);
+          if (laserViolation.isBreached && !fsm.hasFault) {
+            hapticEngine.triggerFormFault();
+          }
+        } else {
+          // Rest interval: sample facial optical rPPG pulse
+          if (webcam && webcam.readyState >= webcam.HAVE_CURRENT_DATA) {
+            rppgResult = rppgEngine.sampleFaceRegion(webcam, landmarks);
+          }
+        }
 
         if (stateMachine.midpointAchieved && !repMidpointCoMY && centerOfMass) {
           repMidpointCoMY = centerOfMass.y;
@@ -1153,7 +1182,9 @@ document.addEventListener('DOMContentLoaded', () => {
       wristMidpoint,
       smoothnessData: smoothnessResult || smoothnessEngine.getSmoothness(),
       perspectiveData: { pitchAngleDeg: perspectiveCalibrator.getPitchDegrees(), isOptimal: perspectiveCalibrator.isOptimal() },
-      workData: workEngine.getWork()
+      workData: workEngine.getWork(),
+      laserConstraints: (fsm && fsm.currentState !== 'IDLE' && isTrackingActive) ? laserConstraints : null,
+      rppgData: rppgResult
     });
   });
 
@@ -1205,6 +1236,8 @@ document.addEventListener('DOMContentLoaded', () => {
     smoothnessEngine.reset();
     perspectiveCalibrator.reset();
     workEngine.reset();
+    laserConstraints.reset();
+    rppgEngine.reset();
     sonificationSynth.start();
     rhythmGame.reset();
 
@@ -1258,6 +1291,8 @@ document.addEventListener('DOMContentLoaded', () => {
     smoothnessEngine.reset();
     perspectiveCalibrator.reset();
     workEngine.reset();
+    laserConstraints.reset();
+    rppgEngine.reset();
     sonificationSynth.stop();
 
     // Release Screen Wake Lock & trigger finish haptic
