@@ -205,7 +205,9 @@ export class HUDRenderer {
     perspectiveData = null,
     workData = null,
     laserConstraints = null,
-    rppgData = null
+    rppgData = null,
+    virtualGimbal = null,
+    safetySpotterData = null
   }) {
     this.clear();
 
@@ -223,6 +225,16 @@ export class HUDRenderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const theme = this._getTheme(activeAngle, hasFault);
+
+    // Update Virtual Gimbal auto-zoom and pan viewport
+    if (virtualGimbal && landmarks && landmarks.length > 0) {
+      virtualGimbal.calculateViewport(landmarks, width, height);
+    }
+
+    // Apply Virtual Gimbal transformation for athlete-centered spatial elements
+    if (virtualGimbal) {
+      virtualGimbal.applyTransform(this.ctx);
+    }
 
     // 1. AR 3D Floor Perspective Grid (below feet)
     this._renderFloorGrid(landmarks, width, height, now);
@@ -249,14 +261,29 @@ export class HUDRenderer {
     // 5. 3D Biomechanical Radial Angle Gauge
     this._renderRadialAngleGauge(landmarks, activeExercise, activeAngle, theme, now, width, height);
 
-    // 6. Bilateral Symmetry Real-Time HUD Balance Bar
-    if (symmetry) {
-      this._renderSymmetryGauge(symmetry, width, height);
-    }
-
     // 7. Knee Cave (Valgus) Outward Corrective Warning Vectors
     if (valgusResult && valgusResult.hasValgus && activeExercise === 'SQUAT') {
       this._renderValgusWarning(valgusResult, width, height, now);
+    }
+
+    // 15. Center-of-Mass AR Plumb Line & Floor Balance Ring
+    if (centerOfMass && landmarks && landmarks.length >= 25) {
+      this._renderCenterOfMassPlumbLine(centerOfMass, landmarks, width, height);
+    }
+
+    // 25. AR Spatial Laser Constraints & Movement Corridor Boundaries
+    if (laserConstraints) {
+      this._renderLaserConstraints(laserConstraints, width, height, now);
+    }
+
+    // Reset Virtual Gimbal transformation back to screen-space for HUD chrome
+    if (virtualGimbal) {
+      virtualGimbal.resetTransform(this.ctx);
+    }
+
+    // 6. Bilateral Symmetry Real-Time HUD Balance Bar
+    if (symmetry) {
+      this._renderSymmetryGauge(symmetry, width, height);
     }
 
     // 8. Hands-Free Gesture Hold Confirmation Ring
@@ -295,11 +322,6 @@ export class HUDRenderer {
       if (rhythmGame.comboStreak > 0) {
         this._renderComboBadge(rhythmGame.comboStreak, rhythmGame.getMultiplier(), rhythmGame.getComboTierLabel(), width, height, now);
       }
-    }
-
-    // 15. Center-of-Mass AR Plumb Line & Floor Balance Ring
-    if (centerOfMass && landmarks && landmarks.length >= 25) {
-      this._renderCenterOfMassPlumbLine(centerOfMass, landmarks, width, height);
     }
 
     // 16. Concentric Mechanical Power Meter (Watts)
@@ -347,14 +369,14 @@ export class HUDRenderer {
       this._renderEnergyBattery(workData, width, height, now);
     }
 
-    // 25. AR Spatial Laser Constraints & Movement Corridor Boundaries
-    if (laserConstraints) {
-      this._renderLaserConstraints(laserConstraints, width, height, now);
-    }
-
     // 26. Rest-Mode Facial Optical Pulse (rPPG) Telemetry Card & Forehead Reticle
     if (rppgData && (rppgData.bpm > 0 || rppgData.faceBox)) {
       this._renderRPPGCard(rppgData, width, height, now);
+    }
+
+    // 27. Biomechanical Sticking-Point Safety Spotter HUD Overlay
+    if (safetySpotterData) {
+      this._renderSafetySpotter(safetySpotterData, width, height, now);
     }
 
     this.ctx.restore();
@@ -2693,4 +2715,178 @@ export class HUDRenderer {
     }
     return false;
   }
+
+  /**
+   * Renders the Biomechanical Sticking-Point Safety Spotter HUD overlay.
+   * - Normal: Ambient cyber-cyan HUD status chip.
+   * - Warning (Velocity Loss > 40%): Amber pulsing border pill (STICKING POINT DETECTED).
+   * - Critical (Stall > 1.2s): Pulsing strobe crimson screen border with high-contrast emergency badge.
+   * 
+   * @param {{
+   *   isStalled: boolean,
+   *   severity: 'NORMAL'|'WARNING'|'CRITICAL',
+   *   cue: string,
+   *   velocityLossPercent?: number,
+   *   inStickingZone?: boolean
+   * }} safetyData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderSafetySpotter(safetyData, width, height, now) {
+    if (!safetyData) return;
+
+    const ctx = this.ctx;
+    const severity = safetyData.severity || 'NORMAL';
+
+    ctx.save();
+
+    if (severity === 'CRITICAL') {
+      // 1. Critical Emergency Stall: Strobe crimson screen border & high-contrast badge
+      const strobeRate = Math.sin(now / 75); // fast ~6.5 Hz strobe
+      const strobeAlpha = 0.65 + (0.35 * Math.abs(strobeRate));
+      const borderThickness = 10;
+
+      // Screen-wide crimson alert border
+      ctx.strokeStyle = `rgba(255, 0, 85, ${strobeAlpha.toFixed(3)})`;
+      ctx.lineWidth = borderThickness;
+      ctx.shadowColor = '#ff0055';
+      ctx.shadowBlur = 24;
+      ctx.strokeRect(borderThickness / 2, borderThickness / 2, width - borderThickness, height - borderThickness);
+
+      // Semi-transparent emergency red wash
+      ctx.fillStyle = `rgba(255, 0, 85, ${(0.10 * Math.abs(strobeRate)).toFixed(3)})`;
+      ctx.fillRect(0, 0, width, height);
+
+      // High-Contrast Emergency Badge (Center-Top)
+      const badgeW = Math.min(width - 40, 520);
+      const badgeH = 76;
+      const badgeX = (width - badgeW) / 2;
+      const badgeY = 88;
+
+      // Dark card with neon crimson border
+      ctx.shadowBlur = 28;
+      ctx.shadowColor = '#ff0055';
+      ctx.fillStyle = 'rgba(15, 3, 8, 0.95)';
+      ctx.strokeStyle = '#ff0055';
+      ctx.lineWidth = 2.5;
+
+      this._drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, 10);
+      ctx.fill();
+      ctx.stroke();
+
+      // Hazard diagonal hash accents on left and right edges
+      ctx.save();
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(255, 0, 85, 0.25)';
+      ctx.lineWidth = 3;
+      for (let x = badgeX - 20; x < badgeX + badgeW + 40; x += 16) {
+        ctx.beginPath();
+        ctx.moveTo(x, badgeY);
+        ctx.lineTo(x + 12, badgeY + badgeH);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Top title text
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = '#ff0055';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 15px "Orbitron", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('⚠️ EMERGENCY: STALL DETECTED - DUMP SAFELY', width / 2, badgeY + 26);
+
+      // Subtitle directive
+      ctx.fillStyle = '#ff0055';
+      ctx.font = '600 12px "Inter", sans-serif';
+      ctx.fillText('CRITICAL STICKING STALL > 1.2s | RELEASE WEIGHT / SECURE POSITION', width / 2, badgeY + 52);
+
+    } else if (severity === 'WARNING') {
+      // 2. Warning: Amber pulsing border pill (STICKING POINT DETECTED)
+      const pulse = 0.55 + (0.45 * Math.sin(now / 160)); // ~3 Hz pulse
+      const pillW = 310;
+      const pillH = 34;
+      const pillX = (width - pillW) / 2;
+      const pillY = 82;
+
+      // Glowing amber pill
+      ctx.shadowColor = '#f59e0b';
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = 'rgba(24, 18, 5, 0.88)';
+      ctx.strokeStyle = `rgba(245, 158, 11, ${pulse.toFixed(3)})`;
+      ctx.lineWidth = 2;
+
+      this._drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      // Amber indicator dot
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(pillX + 20, pillY + (pillH / 2), 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Text label
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = '#fef3c7';
+      ctx.font = '700 11px "Orbitron", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lossLabel = safetyData.velocityLossPercent ? ` [${safetyData.velocityLossPercent}% LOSS]` : '';
+      ctx.fillText(`⚡ STICKING POINT DETECTED${lossLabel}`, (width / 2) + 6, pillY + (pillH / 2));
+
+      // Subtle amber corner hazard brackets
+      ctx.strokeStyle = `rgba(245, 158, 11, ${(0.4 * pulse).toFixed(3)})`;
+      ctx.lineWidth = 3;
+      const bSize = 24;
+      // Top-left
+      ctx.beginPath();
+      ctx.moveTo(12, 12 + bSize);
+      ctx.lineTo(12, 12);
+      ctx.lineTo(12 + bSize, 12);
+      ctx.stroke();
+      // Top-right
+      ctx.beginPath();
+      ctx.moveTo(width - 12 - bSize, 12);
+      ctx.lineTo(width - 12, 12);
+      ctx.lineTo(width - 12, 12 + bSize);
+      ctx.stroke();
+
+    } else {
+      // 3. Normal: Ambient cyber-cyan HUD
+      // Discreet cyber status tag in the upper-right telemetry rail
+      const tagW = 148;
+      const tagH = 22;
+      const tagX = width - tagW - 20;
+      const tagY = 56;
+
+      ctx.fillStyle = 'rgba(5, 20, 28, 0.65)';
+      ctx.strokeStyle = 'rgba(0, 242, 254, 0.35)';
+      ctx.lineWidth = 1;
+
+      this._drawRoundedRect(ctx, tagX, tagY, tagW, tagH, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      // Cyan pulse dot
+      ctx.fillStyle = '#00f2fe';
+      ctx.shadowColor = '#00f2fe';
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(tagX + 12, tagY + (tagH / 2), 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#a5f3fc';
+      ctx.font = '600 9px "Orbitron", monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('SPOTTER: ACTIVE', tagX + 22, tagY + (tagH / 2));
+    }
+
+    ctx.restore();
+  }
 }
+

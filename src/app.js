@@ -38,6 +38,8 @@ import { PerspectiveCalibrator } from './core/perspectiveCalibrator.js';
 import { WorkEngine } from './core/workEngine.js';
 import { RPPGEngine } from './core/rppgEngine.js';
 import { LaserConstraints } from './ui/laserConstraints.js';
+import { VirtualGimbal } from './ui/virtualGimbal.js';
+import { SafetySpotter } from './logic/safetySpotter.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -125,6 +127,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const workEngine = new WorkEngine();
   const rppgEngine = new RPPGEngine();
   const laserConstraints = new LaserConstraints();
+  const virtualGimbal = new VirtualGimbal();
+  const safetySpotter = new SafetySpotter();
+  let lastCriticalStallTime = 0;
   let lastFrameTimestamp = 0;
   let isTwinActive = true;
   let currentStrainData = null;
@@ -504,6 +509,9 @@ document.addEventListener('DOMContentLoaded', () => {
     workEngine.reset();
     laserConstraints.reset();
     rppgEngine.reset();
+    virtualGimbal.reset();
+    safetySpotter.reset();
+    lastCriticalStallTime = 0;
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -585,6 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let targetDepthY = 0;
     let isLaserTriggered = false;
     let centerOfMass = null;
+    let safetyResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -733,7 +742,9 @@ document.addEventListener('DOMContentLoaded', () => {
           perspectiveData: { pitchAngleDeg: perspectiveCalibrator.getPitchDegrees(), isOptimal: perspectiveCalibrator.isOptimal() },
           workData: workEngine.getWork(),
           laserConstraints: null,
-          rppgData: (webcam && webcam.readyState >= webcam.HAVE_CURRENT_DATA) ? rppgEngine.sampleFaceRegion(webcam, landmarks) : null
+          rppgData: (webcam && webcam.readyState >= webcam.HAVE_CURRENT_DATA) ? rppgEngine.sampleFaceRegion(webcam, landmarks) : null,
+          virtualGimbal: null,
+          safetySpotterData: null
         });
         return;
       }
@@ -934,9 +945,10 @@ document.addEventListener('DOMContentLoaded', () => {
       lastLaserTriggered = isLaserTriggered;
 
       // Track joint velocity & bar path trajectory
+      let currentVelocity = 0;
       if (selectedVertex) {
-        const velocity = biomechanicsEngine.calculateRepVelocity(selectedVertex.y, performance.now());
-        barPath = biomechanicsEngine.trackBarPath(selectedVertex, velocity);
+        currentVelocity = biomechanicsEngine.calculateRepVelocity(selectedVertex.y, performance.now());
+        barPath = biomechanicsEngine.trackBarPath(selectedVertex, currentVelocity);
       }
 
       // Movement Smoothness & Dimensionless Jerk Engine
@@ -965,6 +977,24 @@ document.addEventListener('DOMContentLoaded', () => {
       if (calibrationResult && calibrationResult.isSteadyCalibrated) {
         fsm = stateMachine.update(activeExercise, currentAngle, torsoIncline, lateralBalanceDelta);
         cadenceResult = cadenceEngine.update(fsm.currentState, currentAngle, stateMachine.midpointAchieved);
+
+        // Biomechanical Sticking-Point Safety Spotter evaluation
+        const isConcentricAscent = stateMachine.midpointAchieved && fsm.currentState === 'IN_PROGRESS';
+        const timeInConcentricMs = isConcentricAscent && stateMachine.concentricStartTime
+          ? (performance.now() - stateMachine.concentricStartTime)
+          : 0;
+        safetyResult = safetySpotter.evaluateAscent(currentAngle, currentVelocity, timeInConcentricMs);
+
+        // Emergency voice coaching interrupt upon critical sticking stall
+        if (safetyResult.severity === 'CRITICAL' && isTrackingActive) {
+          const nowMs = performance.now();
+          if (nowMs - lastCriticalStallTime > 2500) {
+            lastCriticalStallTime = nowMs;
+            voiceCoach.speak(safetyResult.cue, true);
+            hapticEngine.triggerFormFault();
+            writeLog(`⚠️ [SAFETY SPOTTER] Critical concentric stall detected! ${safetyResult.cue}`, true);
+          }
+        }
 
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
@@ -1085,6 +1115,8 @@ document.addEventListener('DOMContentLoaded', () => {
           initiatedRep = false;
           smoothnessEngine.resetConcentric();
           workEngine.triggerRepPulse();
+          safetySpotter.reset();
+          lastCriticalStallTime = 0;
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1184,7 +1216,9 @@ document.addEventListener('DOMContentLoaded', () => {
       perspectiveData: { pitchAngleDeg: perspectiveCalibrator.getPitchDegrees(), isOptimal: perspectiveCalibrator.isOptimal() },
       workData: workEngine.getWork(),
       laserConstraints: (fsm && fsm.currentState !== 'IDLE' && isTrackingActive) ? laserConstraints : null,
-      rppgData: rppgResult
+      rppgData: rppgResult,
+      virtualGimbal: hasPose ? virtualGimbal : null,
+      safetySpotterData: safetyResult
     });
   });
 
