@@ -40,6 +40,8 @@ import { RPPGEngine } from './core/rppgEngine.js';
 import { LaserConstraints } from './ui/laserConstraints.js';
 import { VirtualGimbal } from './ui/virtualGimbal.js';
 import { SafetySpotter } from './logic/safetySpotter.js';
+import { SpineAnalyzer } from './core/spineAnalyzer.js';
+import { ReportGenerator } from './ui/reportGenerator.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -129,10 +131,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const laserConstraints = new LaserConstraints();
   const virtualGimbal = new VirtualGimbal();
   const safetySpotter = new SafetySpotter();
+  const spineAnalyzer = new SpineAnalyzer();
+  const reportGenerator = new ReportGenerator();
   let lastCriticalStallTime = 0;
+  let lastSpineAlertTime = 0;
   let lastFrameTimestamp = 0;
   let isTwinActive = true;
   let currentStrainData = null;
+
+  // Bind Clinical Biomechanics Laboratory Report Exporter
+  summaryModal.setOnDownloadReport(async (sessionData) => {
+    writeLog('📄 Generating Clinical Biomechanics Laboratory Report (2480x3508 A4 @ 300 DPI)...');
+    const success = await reportGenerator.generateClinicalReport(sessionData);
+    if (success) {
+      writeLog('✅ Clinical Biomechanics Report downloaded successfully.');
+    } else {
+      writeLog('⚠️ Failed to generate report. Please check browser download permissions.', true);
+    }
+  });
 
   if (historyBtn && historyDrawer) {
     historyBtn.addEventListener('click', () => {
@@ -511,7 +527,9 @@ document.addEventListener('DOMContentLoaded', () => {
     rppgEngine.reset();
     virtualGimbal.reset();
     safetySpotter.reset();
+    spineAnalyzer.reset();
     lastCriticalStallTime = 0;
+    lastSpineAlertTime = 0;
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -594,6 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isLaserTriggered = false;
     let centerOfMass = null;
     let safetyResult = null;
+    let spineResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -744,7 +763,8 @@ document.addEventListener('DOMContentLoaded', () => {
           laserConstraints: null,
           rppgData: (webcam && webcam.readyState >= webcam.HAVE_CURRENT_DATA) ? rppgEngine.sampleFaceRegion(webcam, landmarks) : null,
           virtualGimbal: null,
-          safetySpotterData: null
+          safetySpotterData: null,
+          spineData: null
         });
         return;
       }
@@ -996,6 +1016,21 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
+        // Lumbar Spine Curvature Tensor & Biomechanical Alignment Evaluation
+        spineResult = spineAnalyzer.evaluateSpineAlignment(activeLandmarks, activeExercise, currentAngle);
+
+        // Immediate audio alert if critical lumbar flexion is detected during eccentric/inflection phase
+        const isDescentOrBottom = (fsm.currentState === 'IN_PROGRESS' || fsm.currentState === 'SETUP') && (!stateMachine.midpointAchieved || currentAngle <= 95);
+        if (spineResult.status === 'CRITICAL_FLEXION' && isTrackingActive && isDescentOrBottom) {
+          const nowMs = performance.now();
+          if (nowMs - lastSpineAlertTime > 2500) {
+            lastSpineAlertTime = nowMs;
+            voiceCoach.speakPhrase(PhraseKey.BRACE_CORE, true);
+            hapticEngine.triggerFormFault();
+            writeLog(`⚠️ [SPINE ALERT] Critical lumbar shear detected (${spineResult.lumbarFlexionDeg}° flexion)! Brace core.`, true);
+          }
+        }
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1117,6 +1152,8 @@ document.addEventListener('DOMContentLoaded', () => {
           workEngine.triggerRepPulse();
           safetySpotter.reset();
           lastCriticalStallTime = 0;
+          spineAnalyzer.onRepComplete();
+          lastSpineAlertTime = 0;
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1218,7 +1255,8 @@ document.addEventListener('DOMContentLoaded', () => {
       laserConstraints: (fsm && fsm.currentState !== 'IDLE' && isTrackingActive) ? laserConstraints : null,
       rppgData: rppgResult,
       virtualGimbal: hasPose ? virtualGimbal : null,
-      safetySpotterData: safetyResult
+      safetySpotterData: safetyResult,
+      spineData: spineResult
     });
   });
 
@@ -1327,6 +1365,11 @@ document.addEventListener('DOMContentLoaded', () => {
     workEngine.reset();
     laserConstraints.reset();
     rppgEngine.reset();
+    virtualGimbal.reset();
+    safetySpotter.reset();
+    spineAnalyzer.reset();
+    lastCriticalStallTime = 0;
+    lastSpineAlertTime = 0;
     sonificationSynth.stop();
 
     // Release Screen Wake Lock & trigger finish haptic
@@ -1513,7 +1556,11 @@ document.addEventListener('DOMContentLoaded', () => {
       barPathGrade: barPathEval.rating,
       avgSymmetry,
       repVelocities,
-      mechanicalWork
+      mechanicalWork,
+      durationSeconds,
+      safeRepsCount: spineAnalyzer.safeRepsCount,
+      compromisedRepsCount: spineAnalyzer.compromisedRepsCount,
+      peakLumbarFlexion: spineAnalyzer.peakLumbarFlexion
     });
   });
 });

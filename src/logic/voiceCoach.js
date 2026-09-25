@@ -45,6 +45,7 @@ export const PhraseKey = {
   SIDE_VIEW: 'SIDE_VIEW',
   FRONT_VIEW: 'FRONT_VIEW',
   MATCH_TRAINER_PACE: 'MATCH_TRAINER_PACE',
+  BRACE_CORE: 'BRACE_CORE',
 };
 
 /**
@@ -70,6 +71,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'Side view detected, tracking squat depth.',
     [PhraseKey.FRONT_VIEW]: 'Front view detected, tracking symmetry.',
     [PhraseKey.MATCH_TRAINER_PACE]: "Match the trainer's pace",
+    [PhraseKey.BRACE_CORE]: 'Brace core',
   },
   'zh-CN': {
     [PhraseKey.WORKOUT_STARTED]: '训练开始',
@@ -89,6 +91,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: '检测到侧面视角，正在追踪下蹲深度。',
     [PhraseKey.FRONT_VIEW]: '检测到正面视角，正在追踪身体对称性。',
     [PhraseKey.MATCH_TRAINER_PACE]: '跟上教练的节奏',
+    [PhraseKey.BRACE_CORE]: '收紧核心',
   },
   'hi-IN': {
     [PhraseKey.WORKOUT_STARTED]: 'वर्कआउट शुरू हुआ',
@@ -108,6 +111,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'साइड व्यू डिटेक्ट हुआ, डेप्थ ट्रैक हो रही है।',
     [PhraseKey.FRONT_VIEW]: 'फ्रंट व्यू डिटेक्ट हुआ, सिमिट्री ट्रैक हो रही है।',
     [PhraseKey.MATCH_TRAINER_PACE]: 'ट्रेनर की गति से तालमेल बिठाएं',
+    [PhraseKey.BRACE_CORE]: 'कोर को कस कर रखें',
   },
   'es-ES': {
     [PhraseKey.WORKOUT_STARTED]: 'Entrenamiento iniciado',
@@ -127,6 +131,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'Vista lateral detectada, siguiendo profundidad.',
     [PhraseKey.FRONT_VIEW]: 'Vista frontal detectada, siguiendo simetría.',
     [PhraseKey.MATCH_TRAINER_PACE]: 'Sigue el ritmo del entrenador',
+    [PhraseKey.BRACE_CORE]: 'Activa el abdomen',
   },
   'fr-FR': {
     [PhraseKey.WORKOUT_STARTED]: 'Entraînement démarré',
@@ -146,6 +151,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'Vue de profil détectée, suivi de profondeur.',
     [PhraseKey.FRONT_VIEW]: 'Vue de face détectée, suivi de symétrie.',
     [PhraseKey.MATCH_TRAINER_PACE]: 'Suivez le rythme du coach',
+    [PhraseKey.BRACE_CORE]: 'Gaine les abdos',
   },
   'ar-SA': {
     [PhraseKey.WORKOUT_STARTED]: 'بدأ التمرين',
@@ -165,6 +171,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'تم رصد الرؤية الجانبية وتتبع العمق.',
     [PhraseKey.FRONT_VIEW]: 'تم رصد الرؤية الأمامية وتتبع التوازن.',
     [PhraseKey.MATCH_TRAINER_PACE]: 'اتبع وتيرة المدرب',
+    [PhraseKey.BRACE_CORE]: 'شد عضلات البطن',
   },
   'bn-IN': {
     [PhraseKey.WORKOUT_STARTED]: 'ওয়ার্কআউট শুরু হয়েছে',
@@ -184,6 +191,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'সাইড ভিউ শনাক্ত হয়েছে, ডেপথ ট্র্যাক হচ্ছে।',
     [PhraseKey.FRONT_VIEW]: 'সামনের ভিউ শনাক্ত হয়েছে, ভারসাম্য ট্র্যাক হচ্ছে।',
     [PhraseKey.MATCH_TRAINER_PACE]: 'প্রশিক্ষকের গতির সাথে সামঞ্জস্য রাখুন',
+    [PhraseKey.BRACE_CORE]: 'কোর শক্ত রাখুন',
   },
   'pt-BR': {
     [PhraseKey.WORKOUT_STARTED]: 'Treino iniciado',
@@ -203,6 +211,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'Vista lateral detectada, rastreando profundidade.',
     [PhraseKey.FRONT_VIEW]: 'Vista frontal detectada, rastreando simetria.',
     [PhraseKey.MATCH_TRAINER_PACE]: 'Siga o ritmo do treinador',
+    [PhraseKey.BRACE_CORE]: 'Contraia o abdômen',
   },
   'ru-RU': {
     [PhraseKey.WORKOUT_STARTED]: 'Тренировка началась',
@@ -222,6 +231,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: 'Определен вид сбоку, отслеживание глубины.',
     [PhraseKey.FRONT_VIEW]: 'Определен вид спереди, отслеживание симметрии.',
     [PhraseKey.MATCH_TRAINER_PACE]: 'Держите темп тренера',
+    [PhraseKey.BRACE_CORE]: 'Напрягите пресс',
   },
   'ja-JP': {
     [PhraseKey.WORKOUT_STARTED]: 'トレーニング開始',
@@ -241,6 +251,7 @@ const I18N_DICTIONARY = {
     [PhraseKey.SIDE_VIEW]: '横向きを検知しました。深さを計測します。',
     [PhraseKey.FRONT_VIEW]: '正面を検知しました。対称性を計測します。',
     [PhraseKey.MATCH_TRAINER_PACE]: 'トレーナーのペースに合わせて',
+    [PhraseKey.BRACE_CORE]: '体幹を締めて',
   },
 };
 

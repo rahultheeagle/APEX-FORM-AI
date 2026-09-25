@@ -207,7 +207,8 @@ export class HUDRenderer {
     laserConstraints = null,
     rppgData = null,
     virtualGimbal = null,
-    safetySpotterData = null
+    safetySpotterData = null,
+    spineData = null
   }) {
     this.clear();
 
@@ -274,6 +275,11 @@ export class HUDRenderer {
     // 25. AR Spatial Laser Constraints & Movement Corridor Boundaries
     if (laserConstraints) {
       this._renderLaserConstraints(laserConstraints, width, height, now);
+    }
+
+    // 28. Articulated Glowing Segmented Spine Ladder Overlay
+    if (spineData) {
+      this._renderSpineLadder(spineData, width, height, now);
     }
 
     // Reset Virtual Gimbal transformation back to screen-space for HUD chrome
@@ -2884,6 +2890,161 @@ export class HUDRenderer {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText('SPOTTER: ACTIVE', tagX + 22, tagY + (tagH / 2));
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the articulated glowing segmented spine ladder column.
+   * If status === 'CRITICAL_FLEXION', flashes the lumbar segments in intense Hazard Red (#FF0055)
+   * with an anchored warning tag: ⚠️ LUMBAR SHEAR EXCEEDED.
+   * 
+   * @param {Object} spineData
+   * @param {Array<any>} spineData.spineSegments
+   * @param {string} spineData.status
+   * @param {number} spineData.lumbarFlexionDeg
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderSpineLadder(spineData, width, height, now) {
+    if (!spineData || !spineData.spineSegments || spineData.spineSegments.length === 0) return;
+
+    const ctx = this.ctx;
+    const segments = spineData.spineSegments;
+    const isCritical = spineData.status === 'CRITICAL_FLEXION';
+    const isModerate = spineData.status === 'MODERATE_SHEAR';
+
+    ctx.save();
+
+    // Map segments to canvas coordinates
+    const pixelSegs = segments.map(seg => ({
+      x: seg.x * width,
+      y: seg.y * height,
+      z: seg.z || 0,
+      id: seg.id,
+      label: seg.label,
+      isLumbar: seg.isLumbar
+    }));
+
+    // 1. Draw central vertebral column chord line
+    ctx.beginPath();
+    ctx.moveTo(pixelSegs[0].x, pixelSegs[0].y);
+    for (let i = 1; i < pixelSegs.length; i++) {
+      ctx.lineTo(pixelSegs[i].x, pixelSegs[i].y);
+    }
+
+    if (isCritical) {
+      const strobe = Math.abs(Math.sin(now / 90));
+      ctx.strokeStyle = `rgba(255, 0, 85, ${(0.7 + (0.3 * strobe)).toFixed(2)})`;
+      ctx.shadowColor = '#ff0055';
+      ctx.shadowBlur = 18;
+      ctx.lineWidth = 4;
+    } else if (isModerate) {
+      ctx.strokeStyle = '#f59e0b';
+      ctx.shadowColor = '#f59e0b';
+      ctx.shadowBlur = 12;
+      ctx.lineWidth = 3;
+    } else {
+      ctx.strokeStyle = '#00f2fe';
+      ctx.shadowColor = '#00f2fe';
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 2.5;
+    }
+    ctx.stroke();
+
+    // 2. Draw articulated transverse vertebral rungs (ladder discs)
+    let lumbarAnchor = null;
+
+    for (let i = 0; i < pixelSegs.length; i++) {
+      const curr = pixelSegs[i];
+      const prev = pixelSegs[Math.max(0, i - 1)];
+      const next = pixelSegs[Math.min(pixelSegs.length - 1, i + 1)];
+
+      // Direction vector
+      const dx = next.x - prev.x;
+      const dy = next.y - prev.y;
+      const angle = Math.atan2(dy, dx);
+      // Perpendicular angle
+      const perpAngle = angle + (Math.PI / 2);
+
+      const rungHalfW = curr.isLumbar ? 16 : 13;
+      const rx1 = curr.x + (Math.cos(perpAngle) * rungHalfW);
+      const ry1 = curr.y + (Math.sin(perpAngle) * rungHalfW);
+      const rx2 = curr.x - (Math.cos(perpAngle) * rungHalfW);
+      const ry2 = curr.y - (Math.sin(perpAngle) * rungHalfW);
+
+      // Determine disc color
+      let discColor = '#00f2fe';
+      let discGlow = '#00f2fe';
+      let rungThickness = 3;
+
+      if (curr.isLumbar && isCritical) {
+        discColor = '#ff0055';
+        discGlow = '#ff0055';
+        rungThickness = 5;
+        if (!lumbarAnchor) lumbarAnchor = curr;
+      } else if (curr.isLumbar && isModerate) {
+        discColor = '#f59e0b';
+        discGlow = '#f59e0b';
+        rungThickness = 4;
+      } else if (!curr.isLumbar && isCritical) {
+        discColor = '#f59e0b';
+        discGlow = '#f59e0b';
+      } else {
+        discColor = '#00ff87';
+        discGlow = '#00ff87';
+      }
+
+      // Draw vertebral rung
+      ctx.shadowColor = discGlow;
+      ctx.shadowBlur = curr.isLumbar && isCritical ? 16 : 8;
+      ctx.strokeStyle = discColor;
+      ctx.lineWidth = rungThickness;
+      ctx.beginPath();
+      ctx.moveTo(rx1, ry1);
+      ctx.lineTo(rx2, ry2);
+      ctx.stroke();
+
+      // Center disc nucleus
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(curr.x, curr.y, curr.isLumbar ? 3.5 : 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 3. Anchored Warning Tag if CRITICAL_FLEXION
+    if (isCritical && lumbarAnchor) {
+      const tagX = lumbarAnchor.x + 36;
+      const tagY = lumbarAnchor.y - 14;
+      const tagW = 240;
+      const tagH = 30;
+
+      ctx.shadowColor = '#ff0055';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = 'rgba(20, 2, 8, 0.94)';
+      ctx.strokeStyle = '#ff0055';
+      ctx.lineWidth = 2;
+
+      this._drawRoundedRect(ctx, tagX, tagY, tagW, tagH, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      // Indicator pulse dot
+      ctx.fillStyle = '#ff0055';
+      ctx.beginPath();
+      ctx.arc(tagX + 14, tagY + (tagH / 2), 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Warning text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 11px "Orbitron", monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const flexLabel = spineData.lumbarFlexionDeg ? ` (+${Math.round(spineData.lumbarFlexionDeg)}°)` : '';
+      ctx.fillText(`⚠️ LUMBAR SHEAR EXCEEDED${flexLabel}`, tagX + 24, tagY + (tagH / 2));
     }
 
     ctx.restore();

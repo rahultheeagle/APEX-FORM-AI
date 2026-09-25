@@ -233,8 +233,13 @@
         <span class="modal__velocity-title">CONCENTRIC VELOCITY PER REP (DEG/S)</span>
         <div id="velocity-bars-container" class="modal__velocity-bars"></div>
       </div>
-
-      <button id="modal-close-btn" class="cyber-btn cyber-btn--primary modal__close-btn">SAVE & ARCHIVE</button>
+      <div class="modal__action-row" style="display: flex; gap: 12px; margin-top: 18px; width: 100%;">
+        <button id="download-report-btn" class="cyber-btn cyber-btn--ghost modal__report-btn" style="flex: 1;" title="Export high-resolution clinical biomechanics laboratory report">
+          <span class="cyber-btn__icon">📄</span>
+          <span class="cyber-btn__text">DOWNLOAD CLINICAL REPORT</span>
+        </button>
+        <button id="modal-close-btn" class="cyber-btn cyber-btn--primary modal__close-btn" style="flex: 1;">SAVE & ARCHIVE</button>
+      </div>
     </div>
   </div>
 

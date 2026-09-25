@@ -34,12 +34,35 @@ export class SummaryModal {
     this.velocityBarsEl = modalEl.querySelector('#velocity-bars-container');
     /** @type {HTMLButtonElement|null} @private */
     this.closeBtnEl = modalEl.querySelector('#modal-close-btn');
+    /** @type {HTMLButtonElement|null} @private */
+    this.downloadReportBtnEl = modalEl.querySelector('#download-report-btn');
+
+    /** @type {Object|null} */
+    this.latestSessionData = null;
+    /** @type {Function|null} */
+    this.onDownloadReport = null;
 
     if (this.closeBtnEl) {
       this.closeBtnEl.addEventListener('click', () => {
         this.close();
       });
     }
+
+    if (this.downloadReportBtnEl) {
+      this.downloadReportBtnEl.addEventListener('click', () => {
+        if (this.onDownloadReport && typeof this.onDownloadReport === 'function') {
+          this.onDownloadReport(this.latestSessionData);
+        }
+      });
+    }
+  }
+
+  /**
+   * Sets callback for downloading clinical report.
+   * @param {Function} cb
+   */
+  setOnDownloadReport(cb) {
+    this.onDownloadReport = cb;
   }
 
   /**
@@ -63,8 +86,20 @@ export class SummaryModal {
     barPathGrade = 'A',
     avgSymmetry = 100,
     repVelocities = [],
-    mechanicalWork = { joules: 0, kcal: 0 }
+    mechanicalWork = { joules: 0, kcal: 0 },
+    ...rest
   }) {
+    this.latestSessionData = {
+      totalReps,
+      accuracyRate,
+      avgDepthAngle,
+      exerciseKey,
+      barPathGrade,
+      avgSymmetry,
+      repVelocities,
+      mechanicalWork,
+      ...rest
+    };
     if (this.repsEl) this.repsEl.textContent = String(totalReps);
     if (this.accuracyEl) this.accuracyEl.textContent = `${Math.round(accuracyRate)}%`;
     if (this.angleEl) this.angleEl.textContent = `${Math.round(avgDepthAngle)}°`;
