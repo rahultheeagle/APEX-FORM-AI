@@ -208,7 +208,9 @@ export class HUDRenderer {
     rppgData = null,
     virtualGimbal = null,
     safetySpotterData = null,
-    spineData = null
+    spineData = null,
+    personTrackerData = null,
+    phaseSpaceData = null
   }) {
     this.clear();
 
@@ -239,6 +241,11 @@ export class HUDRenderer {
 
     // 1. AR 3D Floor Perspective Grid (below feet)
     this._renderFloorGrid(landmarks, width, height, now);
+
+    // 1b. Primary Athlete Isolation Glow (Ground Perimeter Holographic Boundary Cage)
+    if (personTrackerData) {
+      this._renderPrimaryAthleteIsolation(personTrackerData, landmarks, width, height, now);
+    }
 
     // Record wrist midpoint if provided
     if (wristMidpoint) {
@@ -383,6 +390,11 @@ export class HUDRenderer {
     // 27. Biomechanical Sticking-Point Safety Spotter HUD Overlay
     if (safetySpotterData) {
       this._renderSafetySpotter(safetySpotterData, width, height, now);
+    }
+
+    // 29. Phase-Plane HUD Radar (Position vs. Velocity Trajectory & Sticking Horizon)
+    if (phaseSpaceData) {
+      this._renderPhasePlaneRadar(phaseSpaceData, width, height, now);
     }
 
     this.ctx.restore();
@@ -3046,6 +3058,370 @@ export class HUDRenderer {
       const flexLabel = spineData.lumbarFlexionDeg ? ` (+${Math.round(spineData.lumbarFlexionDeg)}°)` : '';
       ctx.fillText(`⚠️ LUMBAR SHEAR EXCEEDED${flexLabel}`, tagX + 24, tagY + (tagH / 2));
     }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the mini top-left Phase-Plane HUD Radar showing position vs. velocity (y vs yDot).
+   * Traces a glowing cyan cyclical trajectory curve that loops per repetition.
+   * If isSticking === true, pulses the trajectory curve in vibrant plasma purple
+   * with the alert label: STICKING HORIZON // DRIVE UP and required escape force.
+   * 
+   * @param {Object} phaseSpaceData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderPhasePlaneRadar(phaseSpaceData, width, height, now) {
+    if (!phaseSpaceData) return;
+
+    const ctx = this.ctx;
+    const isSticking = Boolean(phaseSpaceData.isSticking);
+    const velocity = typeof phaseSpaceData.velocity === 'number' ? phaseSpaceData.velocity : 0;
+    const escapeForce = phaseSpaceData.escapeForceRequired || 0;
+    const trajectory = phaseSpaceData.trajectory || (phaseSpaceData.getTrajectory ? phaseSpaceData.getTrajectory() : []);
+
+    const cardW = 168;
+    const cardH = 158;
+    // Mirrored display: (width - cardW - 20) places it on visual TOP-LEFT of screen
+    const x = width - cardW - 20;
+    const y = 72;
+
+    ctx.save();
+
+    // 1. Cyber Radar Card Background
+    const themeColor = isSticking ? '#d946ef' : '#00f2fe';
+    const borderPulse = isSticking ? (0.65 + 0.35 * Math.sin(now / 90)) : 0.40;
+
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.88)';
+    ctx.strokeStyle = isSticking ? `rgba(217, 70, 239, ${borderPulse.toFixed(2)})` : 'rgba(0, 242, 254, 0.35)';
+    ctx.lineWidth = isSticking ? 2.0 : 1.2;
+    ctx.shadowBlur = isSticking ? 16 : 8;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Header Text (Unmirrored for left-to-right reading)
+    const textCenterX = x + (cardW / 2);
+    this._drawUnmirroredText(
+      isSticking ? '⚠️ STICKING DETECTED' : 'PHASE-PLANE RADAR',
+      textCenterX,
+      y + 11,
+      'bold 8px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    // 3. Circular Radar Screen
+    const radarCX = x + (cardW / 2);
+    const radarCY = y + 74;
+    const radius = 42;
+
+    // Dark circular radar backing
+    ctx.beginPath();
+    ctx.arc(radarCX, radarCY, radius, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(3, 8, 18, 0.75)';
+    ctx.fill();
+
+    // Outer radar rim
+    ctx.strokeStyle = isSticking ? 'rgba(217, 70, 239, 0.7)' : 'rgba(0, 242, 254, 0.4)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    // Concentric range rings
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.shadowBlur = 0;
+    
+    ctx.beginPath();
+    ctx.arc(radarCX, radarCY, radius * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(radarCX, radarCY, radius * 0.75, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Crosshairs
+    ctx.beginPath();
+    ctx.moveTo(radarCX - radius + 2, radarCY);
+    ctx.lineTo(radarCX + radius - 2, radarCY);
+    ctx.moveTo(radarCX, radarCY - radius + 2);
+    ctx.lineTo(radarCX, radarCY + radius - 2);
+    ctx.strokeStyle = 'rgba(0, 242, 254, 0.22)';
+    ctx.stroke();
+
+    // Rotating radar sweep ray
+    const sweepAngle = (now / 1400) % (Math.PI * 2);
+    const sweepGrad = ctx.createLinearGradient(
+      radarCX, radarCY,
+      radarCX + Math.cos(sweepAngle) * radius,
+      radarCY + Math.sin(sweepAngle) * radius
+    );
+    sweepGrad.addColorStop(0, 'rgba(0, 242, 254, 0.0)');
+    sweepGrad.addColorStop(1, isSticking ? 'rgba(217, 70, 239, 0.35)' : 'rgba(0, 242, 254, 0.25)');
+
+    ctx.beginPath();
+    ctx.moveTo(radarCX, radarCY);
+    ctx.arc(radarCX, radarCY, radius, sweepAngle - 0.3, sweepAngle);
+    ctx.closePath();
+    ctx.fillStyle = sweepGrad;
+    ctx.fill();
+
+    // Axis micro-labels (unmirrored)
+    this._drawUnmirroredText('+V', radarCX, radarCY - radius + 6, '6px "Orbitron", monospace', '#94a3b8', 'center');
+    this._drawUnmirroredText('-V', radarCX, radarCY + radius - 6, '6px "Orbitron", monospace', '#94a3b8', 'center');
+
+    // 4. Trace the Glowing Cyclical Phase-Space Trajectory Curve
+    if (trajectory && trajectory.length > 1) {
+      ctx.beginPath();
+      let first = true;
+
+      for (let i = 0; i < trajectory.length; i++) {
+        const pt = trajectory[i];
+        if (!pt || typeof pt.y !== 'number' || typeof pt.yDot !== 'number') continue;
+
+        // Map y [0, 1] to [-radius * 0.78, +radius * 0.78]
+        // Map yDot [-1.2, 1.2] m/s to [+radius * 0.78, -radius * 0.78] (positive velocity is upward)
+        const mappedX = radarCX + ((pt.y - 0.5) * 2 * (radius * 0.78));
+        const mappedY = radarCY - ((pt.yDot / 1.2) * (radius * 0.78));
+
+        // Clamp to radar interior circle
+        const distFromCenter = Math.hypot(mappedX - radarCX, mappedY - radarCY);
+        const clampRatio = distFromCenter > (radius - 2) ? ((radius - 2) / distFromCenter) : 1.0;
+        const px = radarCX + (mappedX - radarCX) * clampRatio;
+        const py = radarCY + (mappedY - radarCY) * clampRatio;
+
+        if (first) {
+          ctx.moveTo(px, py);
+          first = false;
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+
+      ctx.strokeStyle = isSticking ? '#d946ef' : '#00f2fe';
+      ctx.lineWidth = isSticking ? 2.6 : 1.8;
+      ctx.shadowBlur = isSticking ? 14 : 7;
+      ctx.shadowColor = isSticking ? '#d946ef' : '#00f2fe';
+      ctx.stroke();
+
+      // Draw current lead orb at last phase point
+      const lastPt = trajectory[trajectory.length - 1];
+      if (lastPt) {
+        const leadX = radarCX + ((lastPt.y - 0.5) * 2 * (radius * 0.78));
+        const leadY = radarCY - ((lastPt.yDot / 1.2) * (radius * 0.78));
+        const leadDist = Math.hypot(leadX - radarCX, leadY - radarCY);
+        const leadRatio = leadDist > (radius - 2) ? ((radius - 2) / leadDist) : 1.0;
+        const lx = radarCX + (leadX - radarCX) * leadRatio;
+        const ly = radarCY + (leadY - radarCY) * leadRatio;
+
+        // Glowing center dot
+        ctx.beginPath();
+        ctx.arc(lx, ly, isSticking ? 4.5 : 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = isSticking ? '#d946ef' : '#00f2fe';
+        ctx.fill();
+
+        // Orbit pulse ring
+        ctx.beginPath();
+        ctx.arc(lx, ly, 6.5, 0, Math.PI * 2);
+        ctx.strokeStyle = isSticking ? '#d946ef' : '#00f2fe';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+    }
+
+    // 5. Lower Alert Label / Telemetry Pill
+    const alertY = y + cardH - 24;
+    const pillW = cardW - 16;
+    const pillH = 18;
+    const pillX = x + 8;
+
+    if (isSticking) {
+      // Pulse background in plasma purple
+      ctx.fillStyle = 'rgba(217, 70, 239, 0.25)';
+      ctx.strokeStyle = '#d946ef';
+      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = '#d946ef';
+
+      this._drawRoundedRect(ctx, pillX, alertY, pillW, pillH, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      this._drawUnmirroredText(
+        `STICKING HORIZON // DRIVE UP`,
+        textCenterX,
+        alertY + (pillH / 2),
+        'bold 7.5px "Orbitron", -apple-system, sans-serif',
+        '#ffffff',
+        'center'
+      );
+    } else {
+      ctx.fillStyle = 'rgba(10, 18, 32, 0.65)';
+      ctx.strokeStyle = 'rgba(0, 242, 254, 0.25)';
+      ctx.lineWidth = 1.0;
+      ctx.shadowBlur = 0;
+
+      this._drawRoundedRect(ctx, pillX, alertY, pillW, pillH, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      const vSign = velocity >= 0 ? '+' : '';
+      this._drawUnmirroredText(
+        `v: ${vSign}${velocity.toFixed(2)} m/s | ORBIT OK`,
+        textCenterX,
+        alertY + (pillH / 2),
+        'bold 7px "Orbitron", -apple-system, sans-serif',
+        '#00f2fe',
+        'center'
+      );
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders a subtle holographic boundary cage around the primary athlete's ground perimeter,
+   * visually separating them from bystanders and background noise.
+   * 
+   * @param {Object} trackerData PersonTracker instance or isolation data
+   * @param {Array<any>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderPrimaryAthleteIsolation(trackerData, landmarks, width, height, now) {
+    if (!trackerData) return;
+
+    const perimeter = trackerData.perimeter || trackerData.lastPerimeter || 
+      (trackerData.getGroundPerimeter ? trackerData.getGroundPerimeter(landmarks) : null);
+    if (!perimeter || !perimeter.center) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const cx = perimeter.center.x * width;
+    const cy = perimeter.center.y * height;
+    const rx = Math.max(25, perimeter.radiusX * width);
+    const ry = Math.max(10, perimeter.radiusY * height);
+
+    // 1. Dual Concentric Ground Ellipse Rings
+    const pulseAlpha = 0.35 + 0.15 * Math.sin(now / 280);
+    
+    // Outer perimeter ring
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(0, 242, 254, ${pulseAlpha.toFixed(2)})`;
+    ctx.lineWidth = 1.8;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#00f2fe';
+    ctx.stroke();
+
+    // Inner dashed ring
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx * 0.85, ry * 0.85, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0, 255, 135, 0.40)';
+    ctx.lineWidth = 1.0;
+    ctx.setLineDash([6, 6]);
+    ctx.lineDashOffset = -(now / 50) % 12;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 2. Holographic Ground Corner Brackets (Framing Athlete Stance)
+    const bracketSize = 14;
+    ctx.strokeStyle = '#00ff87';
+    ctx.lineWidth = 2.0;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#00ff87';
+
+    // Top-Left
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy - ry + bracketSize);
+    ctx.lineTo(cx - rx, cy - ry);
+    ctx.lineTo(cx - rx + bracketSize, cy - ry);
+    ctx.stroke();
+
+    // Top-Right
+    ctx.beginPath();
+    ctx.moveTo(cx + rx - bracketSize, cy - ry);
+    ctx.lineTo(cx + rx, cy - ry);
+    ctx.lineTo(cx + rx, cy - ry + bracketSize);
+    ctx.stroke();
+
+    // Bottom-Left
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy + ry - bracketSize);
+    ctx.lineTo(cx - rx, cy + ry);
+    ctx.lineTo(cx - rx + bracketSize, cy + ry);
+    ctx.stroke();
+
+    // Bottom-Right
+    ctx.beginPath();
+    ctx.moveTo(cx + rx - bracketSize, cy + ry);
+    ctx.lineTo(cx + rx, cy + ry);
+    ctx.lineTo(cx + rx, cy + ry - bracketSize);
+    ctx.stroke();
+
+    // 3. Vertical Laser Light Boundary Cage Beams (rising upwards from perimeter)
+    const cageHeight = 50;
+    const numBeams = 8;
+    for (let i = 0; i < numBeams; i++) {
+      const angle = (i / numBeams) * Math.PI * 2;
+      const bx = cx + Math.cos(angle) * rx;
+      const by = cy + Math.sin(angle) * ry;
+
+      const beamGrad = ctx.createLinearGradient(bx, by, bx, by - cageHeight);
+      beamGrad.addColorStop(0, 'rgba(0, 242, 254, 0.45)');
+      beamGrad.addColorStop(0.4, 'rgba(0, 255, 135, 0.20)');
+      beamGrad.addColorStop(1, 'rgba(0, 242, 254, 0.0)');
+
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx, by - cageHeight);
+      ctx.strokeStyle = beamGrad;
+      ctx.lineWidth = 1.4;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#00f2fe';
+      ctx.stroke();
+
+      // Top glowing beam tip
+      ctx.beginPath();
+      ctx.arc(bx, by - cageHeight, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0, 242, 254, 0.6)';
+      ctx.fill();
+    }
+
+    // 4. Subtle Isolation Anchor Tag below the athlete
+    const tagW = 135;
+    const tagH = 15;
+    const tagX = cx - (tagW / 2);
+    const tagY = cy + ry + 6;
+
+    ctx.fillStyle = 'rgba(5, 15, 24, 0.70)';
+    ctx.strokeStyle = 'rgba(0, 242, 254, 0.35)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = '#00f2fe';
+
+    this._drawRoundedRect(ctx, tagX, tagY, tagW, tagH, 3);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      'PRIMARY ANCHOR [ISOLATED]',
+      cx,
+      tagY + (tagH / 2),
+      'bold 6.5px "Orbitron", -apple-system, sans-serif',
+      '#a5f3fc',
+      'center'
+    );
 
     ctx.restore();
   }

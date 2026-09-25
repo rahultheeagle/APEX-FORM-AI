@@ -42,6 +42,8 @@ import { VirtualGimbal } from './ui/virtualGimbal.js';
 import { SafetySpotter } from './logic/safetySpotter.js';
 import { SpineAnalyzer } from './core/spineAnalyzer.js';
 import { ReportGenerator } from './ui/reportGenerator.js';
+import { PersonTracker } from './core/personTracker.js';
+import { PhaseSpaceEngine } from './core/phaseSpaceEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -133,6 +135,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const safetySpotter = new SafetySpotter();
   const spineAnalyzer = new SpineAnalyzer();
   const reportGenerator = new ReportGenerator();
+  const personTracker = new PersonTracker();
+  const phaseSpaceEngine = new PhaseSpaceEngine();
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
   let lastFrameTimestamp = 0;
@@ -528,6 +532,8 @@ document.addEventListener('DOMContentLoaded', () => {
     virtualGimbal.reset();
     safetySpotter.reset();
     spineAnalyzer.reset();
+    personTracker.reset();
+    phaseSpaceEngine.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     isTrackingPaused = false;
@@ -586,8 +592,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize PoseEngine with callback to process 3D landmarks at 60 FPS
   const poseEngine = new PoseEngine((results) => {
-    const landmarks = results.poseLandmarks;
-    const worldLandmarks = results.poseWorldLandmarks || results.poseLandmarks;
+    // Multi-Person Gym Anchor Filter & Primary Athlete Isolation
+    const rawLandmarks = results.poseLandmarks;
+    const candidates = results.multiPoseLandmarks || results.allPoses || rawLandmarks;
+    const isolatedLandmarks = personTracker.filterFrame(candidates);
+    const landmarks = isolatedLandmarks || rawLandmarks;
+    const worldLandmarks = results.poseWorldLandmarks || landmarks;
     const hasPose = !!(landmarks && landmarks.length > 0);
     const newState = hasPose ? 'detected' : 'searching';
 
@@ -980,6 +990,18 @@ document.addEventListener('DOMContentLoaded', () => {
         smoothnessResult = smoothnessEngine.update(trackingY, performance.now(), isConcentric);
       }
 
+      // Dynamic Phase-Space Trajectory Tracking & Sticking Region Inflection
+      let phaseSpaceResult = null;
+      if (selectedVertex || wristMidpoint || centerOfMass) {
+        const kinematicY = selectedVertex ? selectedVertex.y : (wristMidpoint ? wristMidpoint.y : centerOfMass.y);
+        phaseSpaceResult = phaseSpaceEngine.computePhaseState(
+          kinematicY,
+          null,
+          dtSec,
+          currentAngle
+        );
+      }
+
       // Continuous Auditory Sonification Stream
       if (isTrackingActive && sonificationSynth.isPlaying) {
         let targetDepthAngle = 90;
@@ -1154,6 +1176,7 @@ document.addEventListener('DOMContentLoaded', () => {
           lastCriticalStallTime = 0;
           spineAnalyzer.onRepComplete();
           lastSpineAlertTime = 0;
+          phaseSpaceEngine.onRepComplete();
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1256,7 +1279,9 @@ document.addEventListener('DOMContentLoaded', () => {
       rppgData: rppgResult,
       virtualGimbal: hasPose ? virtualGimbal : null,
       safetySpotterData: safetyResult,
-      spineData: spineResult
+      spineData: spineResult,
+      personTrackerData: hasPose ? personTracker : null,
+      phaseSpaceData: hasPose ? phaseSpaceResult : null
     });
   });
 
@@ -1310,6 +1335,8 @@ document.addEventListener('DOMContentLoaded', () => {
     workEngine.reset();
     laserConstraints.reset();
     rppgEngine.reset();
+    personTracker.reset();
+    phaseSpaceEngine.reset();
     sonificationSynth.start();
     rhythmGame.reset();
 
@@ -1368,6 +1395,8 @@ document.addEventListener('DOMContentLoaded', () => {
     virtualGimbal.reset();
     safetySpotter.reset();
     spineAnalyzer.reset();
+    personTracker.reset();
+    phaseSpaceEngine.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     sonificationSynth.stop();
