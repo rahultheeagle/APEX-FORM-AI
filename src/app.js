@@ -44,6 +44,8 @@ import { SpineAnalyzer } from './core/spineAnalyzer.js';
 import { ReportGenerator } from './ui/reportGenerator.js';
 import { PersonTracker } from './core/personTracker.js';
 import { PhaseSpaceEngine } from './core/phaseSpaceEngine.js';
+import { BarbellAnalyzer } from './core/barbellAnalyzer.js';
+import { ValsalvaMonitor } from './audio/valsalvaMonitor.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -137,6 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const reportGenerator = new ReportGenerator();
   const personTracker = new PersonTracker();
   const phaseSpaceEngine = new PhaseSpaceEngine();
+  const barbellAnalyzer = new BarbellAnalyzer();
+  const valsalvaMonitor = new ValsalvaMonitor();
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
   let lastFrameTimestamp = 0;
@@ -534,6 +538,8 @@ document.addEventListener('DOMContentLoaded', () => {
     spineAnalyzer.reset();
     personTracker.reset();
     phaseSpaceEngine.reset();
+    barbellAnalyzer.reset();
+    valsalvaMonitor.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     isTrackingPaused = false;
@@ -623,6 +629,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let centerOfMass = null;
     let safetyResult = null;
     let spineResult = null;
+    let barbellResult = null;
+    let valsalvaResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -690,6 +698,11 @@ document.addEventListener('DOMContentLoaded', () => {
         wristMidpoint = { x: wristL.x, y: wristL.y };
       } else if (wristR && wristR.visibility > 0.35) {
         wristMidpoint = { x: wristR.x, y: wristR.y };
+      }
+
+      // Real-Time Barbell Collinear Alignment & Sub-Pixel Tilt Radar
+      if (wristL && wristR) {
+        barbellResult = barbellAnalyzer.evaluateBarAlignment(wristL, wristR);
       }
 
       // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
@@ -1053,6 +1066,43 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
+        // Acoustic Valsalva Maneuver & Core Bracing Monitor
+        let repBreathPhase = 'IDLE';
+        const isBottomDepth = (activeExercise === 'SQUAT' && currentAngle <= 95) ||
+                              (activeExercise === 'PUSHUP' && currentAngle <= 95) ||
+                              (activeExercise === 'BICEP_CURL' && currentAngle <= 55);
+        if (fsm.currentState === 'IN_PROGRESS') {
+          if (stateMachine.midpointAchieved) {
+            repBreathPhase = 'ASCENT';
+          } else if (isBottomDepth) {
+            repBreathPhase = 'BOTTOM';
+          } else {
+            repBreathPhase = 'DESCENT';
+          }
+        } else if (fsm.currentState === 'VALIDATED_SUCCESS') {
+          repBreathPhase = 'ASCENT_COMPLETE';
+        } else {
+          repBreathPhase = fsm.currentState;
+        }
+
+        valsalvaResult = valsalvaMonitor.analyzeBreathState({
+          phase: repBreathPhase,
+          isAtBottom: isBottomDepth && fsm.currentState === 'IN_PROGRESS',
+          isDescent: !stateMachine.midpointAchieved && fsm.currentState === 'IN_PROGRESS',
+          isAscentComplete: fsm.currentState === 'VALIDATED_SUCCESS'
+        });
+
+        // Trigger voice coaching if premature breath dump occurs at bottom depth
+        if (valsalvaResult.error === 'PREMATURE_EXHALATION' && isTrackingActive) {
+          const nowMs = performance.now();
+          if (nowMs - lastSpineAlertTime > 2500) {
+            lastSpineAlertTime = nowMs;
+            voiceCoach.speakPhrase(PhraseKey.BRACE_CORE, true);
+            hapticEngine.triggerFormFault();
+            writeLog('⚠️ [VALSALVA LEAK] Premature breath dump at bottom depth! Brace core.', true);
+          }
+        }
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1177,6 +1227,8 @@ document.addEventListener('DOMContentLoaded', () => {
           spineAnalyzer.onRepComplete();
           lastSpineAlertTime = 0;
           phaseSpaceEngine.onRepComplete();
+          barbellAnalyzer.reset();
+          valsalvaMonitor.reset();
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1281,7 +1333,9 @@ document.addEventListener('DOMContentLoaded', () => {
       safetySpotterData: safetyResult,
       spineData: spineResult,
       personTrackerData: hasPose ? personTracker : null,
-      phaseSpaceData: hasPose ? phaseSpaceResult : null
+      phaseSpaceData: hasPose ? phaseSpaceResult : null,
+      barbellData: hasPose ? barbellResult : null,
+      valsalvaData: hasPose ? valsalvaResult : null
     });
   });
 
@@ -1337,6 +1391,15 @@ document.addEventListener('DOMContentLoaded', () => {
     rppgEngine.reset();
     personTracker.reset();
     phaseSpaceEngine.reset();
+    barbellAnalyzer.reset();
+    valsalvaMonitor.reset();
+    valsalvaMonitor.init().then((micActive) => {
+      if (micActive) {
+        writeLog('🎙️ [VALSALVA] Acoustic Core-Bracing Monitor Active.');
+      } else {
+        writeLog('🎙️ [VALSALVA] Optical Biomechanics Active (Microphone fallback).');
+      }
+    }).catch(() => {});
     sonificationSynth.start();
     rhythmGame.reset();
 
@@ -1397,6 +1460,8 @@ document.addEventListener('DOMContentLoaded', () => {
     spineAnalyzer.reset();
     personTracker.reset();
     phaseSpaceEngine.reset();
+    barbellAnalyzer.reset();
+    valsalvaMonitor.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     sonificationSynth.stop();

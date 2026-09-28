@@ -210,7 +210,9 @@ export class HUDRenderer {
     safetySpotterData = null,
     spineData = null,
     personTrackerData = null,
-    phaseSpaceData = null
+    phaseSpaceData = null,
+    barbellData = null,
+    valsalvaData = null
   }) {
     this.clear();
 
@@ -287,6 +289,16 @@ export class HUDRenderer {
     // 28. Articulated Glowing Segmented Spine Ladder Overlay
     if (spineData) {
       this._renderSpineLadder(spineData, width, height, now);
+    }
+
+    // 30. Barbell Collinear Level Gauge & Aircraft Roll Indicator
+    if (barbellData && barbellData.isVisible) {
+      this._renderBarbellLevelGauge(barbellData, width, height, now);
+    }
+
+    // 31. Core Bracing (Valsalva Maneuver) HUD Midsection Shield
+    if (valsalvaData) {
+      this._renderValsalvaShield(valsalvaData, landmarks, width, height, now);
     }
 
     // Reset Virtual Gimbal transformation back to screen-space for HUD chrome
@@ -3422,6 +3434,359 @@ export class HUDRenderer {
       '#a5f3fc',
       'center'
     );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the illuminated neon barbell reference line and aircraft-style roll indicator.
+   * - Shows level horizontal line connecting wrists.
+   * - Green when |tiltDegrees| <= 2.0°.
+   * - Pulsing Amber/Crimson when > 2.0° showing degrees off-axis.
+   * 
+   * @param {Object} barbellData
+   * @param {number} barbellData.tiltDegrees
+   * @param {boolean} barbellData.isLevel
+   * @param {number} barbellData.yawDisparityZ
+   * @param {Object} barbellData.leftWrist
+   * @param {Object} barbellData.rightWrist
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderBarbellLevelGauge(barbellData, width, height, now) {
+    if (!barbellData || !barbellData.leftWrist || !barbellData.rightWrist) return;
+
+    const ctx = this.ctx;
+    const lw = barbellData.leftWrist;
+    const rw = barbellData.rightWrist;
+
+    const x1 = lw.x * width;
+    const y1 = lw.y * height;
+    const x2 = rw.x * width;
+    const y2 = rw.y * height;
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+
+    const tiltDeg = typeof barbellData.tiltDegrees === 'number' ? barbellData.tiltDegrees : 0;
+    const isLevel = Boolean(barbellData.isLevel);
+    const yawZ = barbellData.yawDisparityZ || 0;
+
+    // Determine color theme
+    let color = '#00ff87'; // Emerald
+    let glowColor = '#00ff87';
+    if (!isLevel) {
+      if (Math.abs(tiltDeg) > 5.0) {
+        color = '#ff0055'; // Crimson
+        glowColor = '#ff0055';
+      } else {
+        color = '#f59e0b'; // Amber
+        glowColor = '#f59e0b';
+      }
+    }
+
+    ctx.save();
+
+    // 1. Subtle horizontal ground-plane reference datum through bar midpoint
+    const datumHalfW = 60;
+    ctx.beginPath();
+    ctx.moveTo(mx - datumHalfW, my);
+    ctx.lineTo(mx + datumHalfW, my);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+    ctx.lineWidth = 1.0;
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 2. Illuminated Neon Barbell Bridging Line (connecting bilateral wrists)
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isLevel ? 2.5 : 3.5;
+    ctx.shadowBlur = isLevel ? 10 : 16;
+    ctx.shadowColor = glowColor;
+    ctx.stroke();
+
+    // Crisp white core overlay line
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+
+    // Collar endcap nodes at wrists
+    [ { x: x1, y: y1 }, { x: x2, y: y2 } ].forEach((collar) => {
+      ctx.beginPath();
+      ctx.arc(collar.x, collar.y, 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(10, 16, 30, 0.85)';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.8;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = glowColor;
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(collar.x, collar.y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    });
+
+    // 3. Mini Aircraft-Style Roll Indicator (above bar midpoint)
+    const gaugeCY = my - 34;
+    const gaugeR = 20;
+
+    // Dark instrument bezel backing
+    ctx.beginPath();
+    ctx.arc(mx, gaugeCY, gaugeR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8, 14, 28, 0.90)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isLevel ? 1.4 : 2.0;
+    ctx.shadowBlur = isLevel ? 6 : 14;
+    ctx.shadowColor = glowColor;
+    ctx.fill();
+    ctx.stroke();
+
+    // Fixed aircraft reference symbol (center dot with mini wings)
+    ctx.beginPath();
+    ctx.arc(mx, gaugeCY, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(mx - 8, gaugeCY);
+    ctx.lineTo(mx - 3, gaugeCY);
+    ctx.moveTo(mx + 3, gaugeCY);
+    ctx.lineTo(mx + 8, gaugeCY);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Rotating Artificial Horizon Bar (tilted by -tiltDeg radians in screen space)
+    ctx.save();
+    ctx.translate(mx, gaugeCY);
+    ctx.rotate((tiltDeg * Math.PI) / 180);
+    ctx.beginPath();
+    ctx.moveTo(-gaugeR + 3, 0);
+    ctx.lineTo(gaugeR - 3, 0);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.0;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = glowColor;
+    ctx.stroke();
+    ctx.restore();
+
+    // 4. Digital Readout Pill
+    const pillW = 100;
+    const pillH = 16;
+    const pillX = mx - (pillW / 2);
+    const pillY = gaugeCY - gaugeR - pillH - 4;
+
+    ctx.fillStyle = 'rgba(7, 13, 24, 0.88)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = isLevel ? 4 : 10;
+    ctx.shadowColor = glowColor;
+
+    this._drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    const sign = tiltDeg > 0 ? '+' : '';
+    const label = isLevel ? `LEVEL: ${Math.abs(tiltDeg).toFixed(1)}°` : `TILT: ${sign}${tiltDeg.toFixed(1)}°`;
+    this._drawUnmirroredText(
+      label,
+      mx,
+      pillY + (pillH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      color,
+      'center'
+    );
+
+    // 5. Yaw Disparity Tag if asymmetric extension detected
+    if (Math.abs(yawZ) > 0.05) {
+      const yawW = 90;
+      const yawH = 14;
+      const yawY = my + 14;
+      const yawX = mx - (yawW / 2);
+
+      ctx.fillStyle = 'rgba(25, 15, 5, 0.85)';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.0;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#f59e0b';
+
+      this._drawRoundedRect(ctx, yawX, yawY, yawW, yawH, 3);
+      ctx.fill();
+      ctx.stroke();
+
+      const yawSide = yawZ > 0 ? 'R FWD' : 'L FWD';
+      this._drawUnmirroredText(
+        `YAW: ${yawSide}`,
+        mx,
+        yawY + (yawH / 2),
+        'bold 6.5px "Orbitron", -apple-system, sans-serif',
+        '#f59e0b',
+        'center'
+      );
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Core Bracing (Valsalva Maneuver) HUD Shield near the athlete's midsection.
+   * - Cyan Shield: BRACE LOCKED [VALSALVA ACTIVE]
+   * - Broken Amber/Crimson Shield: ⚠️ CORE LEAK: RE-ENGAGE DIAPHRAGM
+   * 
+   * @param {Object} valsalvaData
+   * @param {boolean} valsalvaData.isBraced
+   * @param {boolean} valsalvaData.valsalvaIntact
+   * @param {string|null} valsalvaData.error
+   * @param {number} valsalvaData.dbLevel
+   * @param {string} valsalvaData.breathPhase
+   * @param {Array<any>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderValsalvaShield(valsalvaData, landmarks, width, height, now) {
+    if (!valsalvaData) return;
+
+    const ctx = this.ctx;
+    const isLeak = valsalvaData.valsalvaIntact === false || valsalvaData.error === 'PREMATURE_EXHALATION';
+    const isBraced = Boolean(valsalvaData.isBraced) && !isLeak;
+    const dbLevel = typeof valsalvaData.dbLevel === 'number' ? valsalvaData.dbLevel : -50;
+
+    // Anchor midsection coordinates
+    let mx = width * 0.5;
+    let my = height * 0.52;
+
+    if (landmarks && landmarks.length >= 25) {
+      const lShoulder = landmarks[11];
+      const rShoulder = landmarks[12];
+      const lHip = landmarks[23];
+      const rHip = landmarks[24];
+
+      if (lShoulder && rShoulder && lHip && rHip) {
+        const sx = ((lShoulder.x + rShoulder.x) / 2) * width;
+        const sy = ((lShoulder.y + rShoulder.y) / 2) * height;
+        const hx = ((lHip.x + rHip.x) / 2) * width;
+        const hy = ((lHip.y + rHip.y) / 2) * height;
+
+        // Position slightly offset to lateral midsection (+48px) so it doesn't collide with spine ladder
+        mx = ((sx + hx) / 2) + 48;
+        my = (0.45 * sy) + (0.55 * hy);
+      }
+    }
+
+    ctx.save();
+
+    // Shield dimensions
+    const sw = 15; // half-width
+    const sh = 34; // full height
+    const themeColor = isLeak ? '#ff0055' : (isBraced ? '#00f2fe' : '#f59e0b');
+    const strobeAlpha = isLeak ? (0.65 + 0.35 * Math.sin(now / 70)) : 0.85;
+
+    // 1. Draw Cybernetic Shield Geometry
+    ctx.shadowBlur = isLeak ? 18 : 10;
+    ctx.shadowColor = themeColor;
+    ctx.lineWidth = isLeak ? 2.5 : 1.8;
+    ctx.strokeStyle = isLeak ? `rgba(255, 0, 85, ${strobeAlpha.toFixed(2)})` : themeColor;
+    ctx.fillStyle = isLeak ? 'rgba(30, 5, 10, 0.85)' : 'rgba(5, 18, 28, 0.85)';
+
+    if (!isLeak) {
+      // Sleek intact shield path
+      ctx.beginPath();
+      ctx.moveTo(mx, my - (sh / 2));
+      ctx.lineTo(mx + sw, my - (sh / 2) + 6);
+      ctx.lineTo(mx + sw, my + 4);
+      ctx.quadraticCurveTo(mx + sw, my + (sh / 2), mx, my + (sh / 2) + 4);
+      ctx.quadraticCurveTo(mx - sw, my + (sh / 2), mx - sw, my + 4);
+      ctx.lineTo(mx - sw, my - (sh / 2) + 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Inner core energy diamond
+      ctx.beginPath();
+      ctx.moveTo(mx, my - 6);
+      ctx.lineTo(mx + 6, my);
+      ctx.lineTo(mx, my + 6);
+      ctx.lineTo(mx - 6, my);
+      ctx.closePath();
+      ctx.fillStyle = themeColor;
+      ctx.shadowBlur = 6;
+      ctx.fill();
+    } else {
+      // Broken / Cracked Shield with central jagged rupture
+      ctx.beginPath();
+      // Left broken half
+      ctx.moveTo(mx, my - (sh / 2));
+      ctx.lineTo(mx - sw, my - (sh / 2) + 6);
+      ctx.lineTo(mx - sw, my + 4);
+      ctx.quadraticCurveTo(mx - sw, my + (sh / 2), mx - 2, my + (sh / 2) + 4);
+      // Jagged rupture line
+      ctx.lineTo(mx + 3, my + 6);
+      ctx.lineTo(mx - 4, my);
+      ctx.lineTo(mx + 2, my - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Right broken half
+      ctx.beginPath();
+      ctx.moveTo(mx + 2, my - (sh / 2) + 2);
+      ctx.lineTo(mx + sw + 2, my - (sh / 2) + 8);
+      ctx.lineTo(mx + sw + 2, my + 6);
+      ctx.quadraticCurveTo(mx + sw + 2, my + (sh / 2) + 2, mx + 4, my + (sh / 2) + 6);
+      ctx.lineTo(mx + 7, my + 6);
+      ctx.lineTo(mx + 1, my);
+      ctx.lineTo(mx + 5, my - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // 2. Floating Telemetry Badge
+    const badgeW = isLeak ? 195 : 155;
+    const badgeH = 22;
+    const badgeX = mx - (badgeW / 2);
+    const badgeY = my + (sh / 2) + 10;
+
+    ctx.fillStyle = isLeak ? 'rgba(25, 3, 8, 0.94)' : 'rgba(5, 14, 24, 0.88)';
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = isLeak ? 14 : 6;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    if (isLeak) {
+      this._drawUnmirroredText(
+        '⚠️ CORE LEAK: RE-ENGAGE DIAPHRAGM',
+        mx,
+        badgeY + (badgeH / 2),
+        'bold 7.5px "Orbitron", -apple-system, sans-serif',
+        '#ff0055',
+        'center'
+      );
+    } else {
+      this._drawUnmirroredText(
+        'BRACE LOCKED [VALSALVA ACTIVE]',
+        mx,
+        badgeY + (badgeH / 2),
+        'bold 7.5px "Orbitron", -apple-system, sans-serif',
+        '#00f2fe',
+        'center'
+      );
+    }
 
     ctx.restore();
   }
