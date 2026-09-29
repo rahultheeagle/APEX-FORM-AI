@@ -72,6 +72,9 @@ export class HUDRenderer {
 
     /** @type {Array<{ x: number, y: number, timestamp?: number }>} Rolling 60-frame wrist midpoint trajectory */
     this.wristHistory = [];
+
+    /** @type {Array<Object>} Kinetic chain golden particles streaming along the skeleton */
+    this.kineticParticles = [];
   }
 
   /**
@@ -212,7 +215,9 @@ export class HUDRenderer {
     personTrackerData = null,
     phaseSpaceData = null,
     barbellData = null,
-    valsalvaData = null
+    valsalvaData = null,
+    mobilityData = null,
+    kineticChainData = null
   }) {
     this.clear();
 
@@ -299,6 +304,16 @@ export class HUDRenderer {
     // 31. Core Bracing (Valsalva Maneuver) HUD Midsection Shield
     if (valsalvaData) {
       this._renderValsalvaShield(valsalvaData, landmarks, width, height, now);
+    }
+
+    // 32. Ankle Dorsiflexion Arc & Premature Heel-Rise Detection
+    if (mobilityData && mobilityData.isVisible) {
+      this._renderAnkleDorsiflexion(mobilityData, landmarks, width, height, now);
+    }
+
+    // 33. Kinetic Chain Golden Skeletal Particle Stream (Triple Extension)
+    if (kineticChainData) {
+      this._renderKineticParticleStream(kineticChainData, landmarks, width, height, now);
     }
 
     // Reset Virtual Gimbal transformation back to screen-space for HUD chrome
@@ -407,6 +422,11 @@ export class HUDRenderer {
     // 29. Phase-Plane HUD Radar (Position vs. Velocity Trajectory & Sticking Horizon)
     if (phaseSpaceData) {
       this._renderPhasePlaneRadar(phaseSpaceData, width, height, now);
+    }
+
+    // 34. Kinetic Chain Sequencing Telemetry Card & Waterfall Graph
+    if (kineticChainData) {
+      this._renderKineticChainCard(kineticChainData, width, height, now);
     }
 
     this.ctx.restore();
@@ -3787,6 +3807,399 @@ export class HUDRenderer {
         'center'
       );
     }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Ankle Dorsiflexion Arc around the ankle joint and premature heel-rise warning ripples.
+   * - Animated cyan angle arc showing degrees of acute dorsiflexion.
+   * - If heelLifting === true, highlights the heel contact point with expanding hazard-amber ripples:
+   *   '⚠️ HEEL RISING // DRIVE FLAT'.
+   * 
+   * @param {Object} mobilityData
+   * @param {Array<Object>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderAnkleDorsiflexion(mobilityData, landmarks, width, height, now) {
+    if (!mobilityData || !mobilityData.isVisible || !mobilityData.anklePoint || !mobilityData.kneePoint || !mobilityData.heelContactPoint || !mobilityData.toePoint) {
+      return;
+    }
+
+    const ctx = this.ctx;
+    const ax = mobilityData.anklePoint.x * width;
+    const ay = mobilityData.anklePoint.y * height;
+    const kx = mobilityData.kneePoint.x * width;
+    const ky = mobilityData.kneePoint.y * height;
+    const hx = mobilityData.heelContactPoint.x * width;
+    const hy = mobilityData.heelContactPoint.y * height;
+    const tx = mobilityData.toePoint.x * width;
+    const ty = mobilityData.toePoint.y * height;
+
+    const angleTibia = Math.atan2(ky - ay, kx - ax);
+    const angleFoot = Math.atan2(ty - hy, tx - hx);
+    const deg = Math.round(mobilityData.dorsiAngleDeg || 0);
+    const isRestricted = mobilityData.mobilityScore === 'RESTRICTED';
+    const isLifting = Boolean(mobilityData.heelLifting);
+
+    const arcColor = isLifting ? '#ff0055' : (isRestricted ? '#f59e0b' : '#00f2fe');
+    const glowColor = isLifting ? '#ff0055' : (isRestricted ? '#f59e0b' : '#00f2fe');
+
+    ctx.save();
+
+    // 1. Animated Ankle Dorsiflexion Arc
+    const arcR = 26;
+    let diff = angleFoot - angleTibia;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    const anticlockwise = diff < 0;
+
+    // Glowing arc line
+    ctx.beginPath();
+    ctx.arc(ax, ay, arcR, angleTibia, angleFoot, anticlockwise);
+    ctx.strokeStyle = arcColor;
+    ctx.lineWidth = isLifting ? 2.8 : 2.0;
+    ctx.shadowBlur = isLifting ? 16 : 8;
+    ctx.shadowColor = glowColor;
+    ctx.stroke();
+
+    // Soft sector fill
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.arc(ax, ay, arcR, angleTibia, angleFoot, anticlockwise);
+    ctx.closePath();
+    ctx.fillStyle = isLifting ? 'rgba(255, 0, 85, 0.22)' : (isRestricted ? 'rgba(245, 158, 11, 0.20)' : 'rgba(0, 242, 254, 0.16)');
+    ctx.fill();
+
+    // Radial guide rays
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax + Math.cos(angleTibia) * (arcR + 5), ay + Math.sin(angleTibia) * (arcR + 5));
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax + Math.cos(angleFoot) * (arcR + 5), ay + Math.sin(angleFoot) * (arcR + 5));
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // Ankle pivot node
+    ctx.beginPath();
+    ctx.arc(ax, ay, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = arcColor;
+    ctx.shadowBlur = 6;
+    ctx.fill();
+
+    // Digital Dorsiflexion Badge Pill
+    const pillW = 76;
+    const pillH = 16;
+    const pillX = ax + (ax > width * 0.5 ? -pillW - 10 : 10);
+    const pillY = ay - (pillH / 2);
+
+    ctx.fillStyle = 'rgba(6, 12, 24, 0.88)';
+    ctx.strokeStyle = arcColor;
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = glowColor;
+
+    this._drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      `${deg}° DORSI`,
+      pillX + (pillW / 2),
+      pillY + (pillH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      arcColor,
+      'center'
+    );
+
+    // 2. Premature Heel Elevation Warning Ripple
+    if (isLifting) {
+      // 3 expanding hazard ripples
+      for (let r = 0; r < 3; r++) {
+        const phase = ((now / 650) + (r * 0.33)) % 1;
+        const radius = 6 + (phase * 30);
+        const alpha = (1.0 - phase) * 0.90;
+
+        ctx.beginPath();
+        ctx.arc(hx, hy, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(245, 158, 11, ${alpha.toFixed(2)})`;
+        ctx.lineWidth = 2.2;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#f59e0b';
+        ctx.stroke();
+      }
+
+      // Heel contact node
+      ctx.beginPath();
+      ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff0055';
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = '#ff0055';
+      ctx.fill();
+
+      // Floating hazard warning badge: ⚠️ HEEL RISING // DRIVE FLAT
+      const badgeW = 176;
+      const badgeH = 20;
+      const badgeX = hx - (badgeW / 2);
+      const badgeY = hy + 18;
+      const strobe = 0.65 + 0.35 * Math.sin(now / 75);
+
+      ctx.fillStyle = 'rgba(25, 5, 10, 0.92)';
+      ctx.strokeStyle = `rgba(255, 0, 85, ${strobe.toFixed(2)})`;
+      ctx.lineWidth = 1.6;
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = '#ff0055';
+
+      this._drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      this._drawUnmirroredText(
+        '⚠️ HEEL RISING // DRIVE FLAT',
+        hx,
+        badgeY + (badgeH / 2),
+        'bold 7.5px "Orbitron", -apple-system, sans-serif',
+        '#ff0055',
+        'center'
+      );
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Emits a golden particle stream propagating up the skeleton (Ankle -> Knee -> Hip -> Torso)
+   * when triple-extension concentric timing is optimal.
+   * 
+   * @param {Object} kineticChainData
+   * @param {Array<Object>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderKineticParticleStream(kineticChainData, landmarks, width, height, now) {
+    if (!kineticChainData || !landmarks || landmarks.length < 29) return;
+
+    const ctx = this.ctx;
+    const isOptimal = kineticChainData.sequenceStatus === 'OPTIMAL_CHAIN';
+    const isDriving = Boolean(kineticChainData.isTripleExtensionActive) || (now - (kineticChainData.tPeakAnkle || 0) < 1400);
+
+    // Identify skeletal path nodes (prioritize more visible side)
+    const scoreL = (landmarks[27]?.visibility || 0) + (landmarks[25]?.visibility || 0) + (landmarks[23]?.visibility || 0);
+    const scoreR = (landmarks[28]?.visibility || 0) + (landmarks[26]?.visibility || 0) + (landmarks[24]?.visibility || 0);
+    const useLeft = scoreL >= scoreR;
+
+    const ankle = landmarks[useLeft ? 27 : 28];
+    const knee = landmarks[useLeft ? 25 : 26];
+    const hip = landmarks[useLeft ? 23 : 24];
+    const shoulderL = landmarks[11];
+    const shoulderR = landmarks[12];
+
+    if (!ankle || !knee || !hip || !shoulderL || !shoulderR) return;
+
+    const midTorso = {
+      x: ((shoulderL.x + shoulderR.x) / 2) * width,
+      y: ((shoulderL.y + shoulderR.y) / 2) * height
+    };
+
+    const chainPoints = [
+      { x: ankle.x * width, y: ankle.y * height },
+      { x: knee.x * width, y: knee.y * height },
+      { x: hip.x * width, y: hip.y * height },
+      midTorso
+    ];
+
+    // Spawn golden particles when optimal concentric triple extension is executing
+    if (isOptimal && isDriving && this.kineticParticles.length < 36) {
+      const spawnCount = 2;
+      for (let s = 0; s < spawnCount; s++) {
+        this.kineticParticles.push({
+          u: 0,
+          speed: 0.022 + (Math.random() * 0.012),
+          size: 2.2 + (Math.random() * 2.2),
+          jitterX: (Math.random() - 0.5) * 6,
+          jitterY: (Math.random() - 0.5) * 6
+        });
+      }
+    }
+
+    if (this.kineticParticles.length === 0) return;
+
+    ctx.save();
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#ffd700';
+
+    const activeParticles = [];
+    for (let i = 0; i < this.kineticParticles.length; i++) {
+      const p = this.kineticParticles[i];
+      p.u += p.speed;
+
+      if (p.u >= 1.0) continue; // particle reached top of kinetic chain
+
+      // Piecewise linear interpolation along the 3 segments: Ankle -> Knee -> Hip -> Torso
+      let segmentIdx = 0;
+      let segU = p.u * 3; // 0 to 3
+      if (segU < 1) {
+        segmentIdx = 0;
+      } else if (segU < 2) {
+        segmentIdx = 1;
+        segU -= 1;
+      } else {
+        segmentIdx = 2;
+        segU -= 2;
+      }
+
+      const pStart = chainPoints[segmentIdx];
+      const pEnd = chainPoints[segmentIdx + 1];
+
+      const px = pStart.x + (pEnd.x - pStart.x) * segU + p.jitterX;
+      const py = pStart.y + (pEnd.y - pStart.y) * segU + p.jitterY;
+      const alpha = Math.max(0.1, 1.0 - (p.u * 0.85));
+
+      ctx.beginPath();
+      ctx.arc(px, py, p.size, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 215, 0, ${alpha.toFixed(2)})`;
+      ctx.fill();
+
+      activeParticles.push(p);
+    }
+
+    this.kineticParticles = activeParticles;
+    ctx.restore();
+  }
+
+  /**
+   * Renders the mini top-right Kinetic Chain Sequencing Telemetry Card & Waterfall Graph.
+   * Displays: 'KINETIC SEQUENCE: [HIP -> KNEE -> ANKLE] 98% MATCH'
+   * 
+   * @param {Object} kineticChainData
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderKineticChainCard(kineticChainData, width, height, now) {
+    if (!kineticChainData) return;
+
+    const ctx = this.ctx;
+    const isOptimal = kineticChainData.sequenceStatus === 'OPTIMAL_CHAIN';
+    const percent = Math.round(kineticChainData.sequenceEfficiencyPercent || 98);
+    const themeColor = isOptimal ? '#ffd700' : '#ff0055';
+    const glowColor = isOptimal ? '#fbbf24' : '#ff0055';
+
+    // Top-right positioned in user space (x = 20 in mirrored canvas space)
+    const cardW = 208;
+    const cardH = 76;
+    const x = 20;
+    const y = 118; // Sits neatly below Bluetooth HR or top telemetry
+
+    ctx.save();
+
+    // 1. Cyber Card Background
+    const borderAlpha = isOptimal ? 0.50 : (0.60 + 0.40 * Math.sin(now / 90));
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = isOptimal ? `rgba(255, 215, 0, ${borderAlpha.toFixed(2)})` : `rgba(255, 0, 85, ${borderAlpha.toFixed(2)})`;
+    ctx.lineWidth = isOptimal ? 1.4 : 1.8;
+    ctx.shadowBlur = isOptimal ? 10 : 16;
+    ctx.shadowColor = glowColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Header Text: KINETIC SEQUENCE: [HIP -> KNEE -> ANKLE] XX% MATCH
+    this._drawUnmirroredText(
+      `KINETIC SEQUENCE: [HIP -> KNEE -> ANKLE] ${percent}% MATCH`,
+      x + (cardW / 2),
+      y + 11,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    // 3. Mini Waterfall Progress Bars (HIP, KNEE, ANKLE)
+    const waterfall = kineticChainData.waterfallData || [
+      { joint: 'HIP', progress: 0.95 },
+      { joint: 'KNEE', progress: 0.88 },
+      { joint: 'ANKLE', progress: 0.75 }
+    ];
+
+    const barStartX = x + 44;
+    const barW = cardW - 88;
+    const barH = 5;
+    const rowStartY = y + 21;
+    const rowSpacing = 11;
+
+    waterfall.forEach((item, idx) => {
+      const rowY = rowStartY + (idx * rowSpacing);
+
+      // Joint Label
+      this._drawUnmirroredText(
+        item.joint,
+        x + 10,
+        rowY + 4,
+        'bold 6.5px "Orbitron", -apple-system, sans-serif',
+        '#94a3b8',
+        'left'
+      );
+
+      // Trough
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      this._drawRoundedRect(ctx, barStartX, rowY, barW, barH, 2);
+      ctx.fill();
+
+      // Active Waterfall Fill
+      const fillW = Math.max(4, barW * (item.progress || 0.1));
+      const grad = ctx.createLinearGradient(barStartX, 0, barStartX + fillW, 0);
+      if (isOptimal) {
+        grad.addColorStop(0, '#00f2fe');
+        grad.addColorStop(1, '#ffd700');
+      } else {
+        grad.addColorStop(0, '#f59e0b');
+        grad.addColorStop(1, '#ff0055');
+      }
+
+      ctx.fillStyle = grad;
+      ctx.shadowBlur = 4;
+      ctx.shadowColor = themeColor;
+      this._drawRoundedRect(ctx, barStartX, rowY, fillW, barH, 2);
+      ctx.fill();
+
+      // Peak Indicator Node
+      ctx.beginPath();
+      ctx.arc(barStartX + fillW, rowY + (barH / 2), 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 4;
+      ctx.fill();
+
+      // Joint velocity readout
+      const vVal = kineticChainData.currentVelocities?.[item.joint.toLowerCase()] || 0;
+      this._drawUnmirroredText(
+        `${vVal}°/s`,
+        x + cardW - 8,
+        rowY + 4,
+        '6.5px "Orbitron", monospace',
+        '#cbd5e1',
+        'right'
+      );
+    });
+
+    // 4. Status Indicator Footer
+    const statusText = isOptimal ? '✓ OPTIMAL TRIPLE EXTENSION' : `⚠️ LEAK: ${kineticChainData.faultReason ? 'KNEE DOMINANT' : 'SEQUENCE MISMATCH'}`;
+    const statusColor = isOptimal ? '#00ff87' : '#ff0055';
+    this._drawUnmirroredText(
+      statusText,
+      x + (cardW / 2),
+      y + cardH - 8,
+      'bold 7px "Orbitron", -apple-system, sans-serif',
+      statusColor,
+      'center'
+    );
 
     ctx.restore();
   }

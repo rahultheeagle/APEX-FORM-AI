@@ -31,6 +31,10 @@ export class SummaryModal {
     /** @type {HTMLElement|null} @private */
     this.workEl = modalEl.querySelector('#stat-work');
     /** @type {HTMLElement|null} @private */
+    this.kineticEl = modalEl.querySelector('#stat-kinetic');
+    /** @type {HTMLElement|null} @private */
+    this.dorsiEl = modalEl.querySelector('#stat-dorsi');
+    /** @type {HTMLElement|null} @private */
     this.velocityBarsEl = modalEl.querySelector('#velocity-bars-container');
     /** @type {HTMLButtonElement|null} @private */
     this.closeBtnEl = modalEl.querySelector('#modal-close-btn');
@@ -116,6 +120,30 @@ export class SummaryModal {
     if (this.workEl) {
       const kj = (mechanicalWork.joules / 1000).toFixed(1);
       this.workEl.textContent = `${kj} kJ (${mechanicalWork.kcal} kcal)`;
+    }
+
+    if (this.kineticEl) {
+      if (rest.kineticChainRating) {
+        const pct = Math.round(rest.kineticChainRating.avgEfficiencyPercent || 98);
+        const status = rest.kineticChainRating.status === 'OPTIMAL_CHAIN' ? 'OPTIMAL' : 'LEAK';
+        this.kineticEl.textContent = `${pct}% [${status}]`;
+        this.kineticEl.style.color = status === 'OPTIMAL' ? '#ffd700' : '#ff0055';
+      } else {
+        this.kineticEl.textContent = '98% [OPTIMAL]';
+        this.kineticEl.style.color = '#ffd700';
+      }
+    }
+
+    if (this.dorsiEl) {
+      if (typeof rest.peakDorsiAngle === 'number') {
+        const angle = Math.round(rest.peakDorsiAngle);
+        const rating = angle <= 78 ? 'ADEQUATE' : 'RESTRICTED';
+        this.dorsiEl.textContent = `${angle}° (${rating})`;
+        this.dorsiEl.style.color = rating === 'ADEQUATE' ? '#00f2fe' : '#f59e0b';
+      } else {
+        this.dorsiEl.textContent = 'ADEQUATE';
+        this.dorsiEl.style.color = '#00f2fe';
+      }
     }
 
     // Populate concentric velocity breakdown chart

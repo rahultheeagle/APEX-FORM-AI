@@ -484,6 +484,11 @@ export class HistoryDrawer {
               <span class="session-metric__label">WORK</span>
               <span class="session-metric__val">${workKj} kJ</span>
             </div>` : ''}
+            ${s.kineticEfficiency ? `
+            <div class="session-metric">
+              <span class="session-metric__label">KINETIC</span>
+              <span class="session-metric__val" style="color: #ffd700;">${s.kineticEfficiency}%</span>
+            </div>` : ''}
           </div>
 
           <!-- Expandable Rep Telemetry Accordion -->

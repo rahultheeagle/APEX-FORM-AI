@@ -46,6 +46,8 @@ import { PersonTracker } from './core/personTracker.js';
 import { PhaseSpaceEngine } from './core/phaseSpaceEngine.js';
 import { BarbellAnalyzer } from './core/barbellAnalyzer.js';
 import { ValsalvaMonitor } from './audio/valsalvaMonitor.js';
+import { MobilityEngine } from './core/mobilityEngine.js';
+import { KineticChainEngine } from './core/kineticChainEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -141,8 +143,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const phaseSpaceEngine = new PhaseSpaceEngine();
   const barbellAnalyzer = new BarbellAnalyzer();
   const valsalvaMonitor = new ValsalvaMonitor();
+  const mobilityEngine = new MobilityEngine();
+  const kineticChainEngine = new KineticChainEngine();
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
+  let lastMobilityAlertTime = 0;
   let lastFrameTimestamp = 0;
   let isTwinActive = true;
   let currentStrainData = null;
@@ -540,8 +545,11 @@ document.addEventListener('DOMContentLoaded', () => {
     phaseSpaceEngine.reset();
     barbellAnalyzer.reset();
     valsalvaMonitor.reset();
+    mobilityEngine.reset();
+    kineticChainEngine.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
+    lastMobilityAlertTime = 0;
     isTrackingPaused = false;
     lastRepCount = 0;
     lastState = 'IDLE';
@@ -631,6 +639,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let spineResult = null;
     let barbellResult = null;
     let valsalvaResult = null;
+    let mobilityResult = null;
+    let kineticChainResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -1103,6 +1113,23 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
+        // Ankle Dorsiflexion Diagnostic & Premature Heel-Rise Detection
+        mobilityResult = mobilityEngine.analyzeLandmarks(activeLandmarks);
+
+        // Immediate tactile and log alert if heel elevation occurs during active repetition
+        if (mobilityResult.heelLifting && isTrackingActive && fsm.currentState === 'IN_PROGRESS') {
+          const nowMs = performance.now();
+          if (nowMs - lastMobilityAlertTime > 2500) {
+            lastMobilityAlertTime = nowMs;
+            hapticEngine.triggerFormFault();
+            writeLog('⚠️ [ANKLE MOBILITY] Premature heel elevation detected! Keep heels flat on the floor.', true);
+          }
+        }
+
+        // Neuromuscular Proximal-to-Distal Kinetic Chain Sequencing
+        const isConcentricAscent = stateMachine.midpointAchieved && fsm.currentState === 'IN_PROGRESS';
+        kineticChainResult = kineticChainEngine.analyzeLandmarks(activeLandmarks, performance.now(), isConcentricAscent, true);
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1229,6 +1256,9 @@ document.addEventListener('DOMContentLoaded', () => {
           phaseSpaceEngine.onRepComplete();
           barbellAnalyzer.reset();
           valsalvaMonitor.reset();
+          mobilityEngine.onRepComplete();
+          kineticChainEngine.onRepComplete();
+          lastMobilityAlertTime = 0;
         }
 
         if (fsm.currentState === 'FORM_FAULT' && lastState !== 'FORM_FAULT') {
@@ -1335,7 +1365,9 @@ document.addEventListener('DOMContentLoaded', () => {
       personTrackerData: hasPose ? personTracker : null,
       phaseSpaceData: hasPose ? phaseSpaceResult : null,
       barbellData: hasPose ? barbellResult : null,
-      valsalvaData: hasPose ? valsalvaResult : null
+      valsalvaData: hasPose ? valsalvaResult : null,
+      mobilityData: hasPose ? mobilityResult : null,
+      kineticChainData: hasPose ? kineticChainResult : null
     });
   });
 
@@ -1393,6 +1425,9 @@ document.addEventListener('DOMContentLoaded', () => {
     phaseSpaceEngine.reset();
     barbellAnalyzer.reset();
     valsalvaMonitor.reset();
+    mobilityEngine.reset();
+    kineticChainEngine.reset();
+    lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
       if (micActive) {
         writeLog('🎙️ [VALSALVA] Acoustic Core-Bracing Monitor Active.');
@@ -1462,8 +1497,11 @@ document.addEventListener('DOMContentLoaded', () => {
     phaseSpaceEngine.reset();
     barbellAnalyzer.reset();
     valsalvaMonitor.stop();
+    mobilityEngine.reset();
+    kineticChainEngine.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
+    lastMobilityAlertTime = 0;
     sonificationSynth.stop();
 
     // Release Screen Wake Lock & trigger finish haptic
@@ -1571,6 +1609,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Advanced Biomechanics Aggregates
+    const kineticChainSummary = kineticChainEngine.getSessionSummary();
+    const peakDorsiAngle = mobilityEngine.peakRepDorsiDeg;
     const barPathEval = biomechanicsEngine.evaluateBarPathConsistency(fullSessionPath);
     const avgSymmetry = symmetrySamples.length > 0 ?
       Number((symmetrySamples.reduce((a, b) => a + b, 0) / symmetrySamples.length).toFixed(1)) : 98.4;
@@ -1604,6 +1644,9 @@ document.addEventListener('DOMContentLoaded', () => {
         barPathGrade: barPathEval.rating,
         avgSymmetry,
         mechanicalWork,
+        kineticEfficiency: kineticChainSummary.avgEfficiencyPercent,
+        kineticStatus: kineticChainSummary.status,
+        peakDorsiAngle: Math.round(peakDorsiAngle),
         repDetails: completedReps.map((r, i) => ({
           repNum: r.repNum,
           peakAngle: Math.round(r.peakAngle),
@@ -1654,7 +1697,9 @@ document.addEventListener('DOMContentLoaded', () => {
       durationSeconds,
       safeRepsCount: spineAnalyzer.safeRepsCount,
       compromisedRepsCount: spineAnalyzer.compromisedRepsCount,
-      peakLumbarFlexion: spineAnalyzer.peakLumbarFlexion
+      peakLumbarFlexion: spineAnalyzer.peakLumbarFlexion,
+      kineticChainRating: kineticChainSummary,
+      peakDorsiAngle: Math.round(peakDorsiAngle)
     });
   });
 });
