@@ -48,6 +48,9 @@ import { BarbellAnalyzer } from './core/barbellAnalyzer.js';
 import { ValsalvaMonitor } from './audio/valsalvaMonitor.js';
 import { MobilityEngine } from './core/mobilityEngine.js';
 import { KineticChainEngine } from './core/kineticChainEngine.js';
+import { BarbellRadar } from './core/barbellRadar.js';
+import { KineticTelemetry } from './core/kineticTelemetry.js';
+import { TelemetryHud } from './ui/telemetryHud.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -145,6 +148,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const valsalvaMonitor = new ValsalvaMonitor();
   const mobilityEngine = new MobilityEngine();
   const kineticChainEngine = new KineticChainEngine();
+  const barbellRadar = new BarbellRadar();
+  const kineticTelemetry = new KineticTelemetry();
+  const telemetryHud = new TelemetryHud();
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
   let lastMobilityAlertTime = 0;
@@ -547,6 +553,8 @@ document.addEventListener('DOMContentLoaded', () => {
     valsalvaMonitor.reset();
     mobilityEngine.reset();
     kineticChainEngine.reset();
+    barbellRadar.reset();
+    kineticTelemetry.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
@@ -641,6 +649,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let valsalvaResult = null;
     let mobilityResult = null;
     let kineticChainResult = null;
+    let barbellRadarResult = null;
+    let kineticTelemetryResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -713,6 +723,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Real-Time Barbell Collinear Alignment & Sub-Pixel Tilt Radar
       if (wristL && wristR) {
         barbellResult = barbellAnalyzer.evaluateBarAlignment(wristL, wristR);
+        barbellRadarResult = barbellRadar.analyzeBar(wristL, wristR, nowMs);
       }
 
       // 1. Autonomous Calibration & Multi-Angle Viewpoint Evaluation
@@ -1130,6 +1141,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const isConcentricAscent = stateMachine.midpointAchieved && fsm.currentState === 'IN_PROGRESS';
         kineticChainResult = kineticChainEngine.analyzeLandmarks(activeLandmarks, performance.now(), isConcentricAscent, true);
 
+        // Dynamic Kinetic Telemetry & Concentric Velocity Decay Pipeline
+        const trackingKinematicY = (barbellRadarResult && barbellRadarResult.barMidpoint)
+          ? barbellRadarResult.barMidpoint.y
+          : (wristMidpoint ? wristMidpoint.y : (selectedVertex ? selectedVertex.y : (centerOfMass ? centerOfMass.y : 0.5)));
+        kineticTelemetryResult = kineticTelemetry.update(trackingKinematicY, nowMs, isConcentricAscent, fsm.repCount);
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1258,6 +1275,8 @@ document.addEventListener('DOMContentLoaded', () => {
           valsalvaMonitor.reset();
           mobilityEngine.onRepComplete();
           kineticChainEngine.onRepComplete();
+          barbellRadar.resetDriftPlane();
+          kineticTelemetry.onRepComplete(fsm.repCount);
           lastMobilityAlertTime = 0;
         }
 
@@ -1369,6 +1388,16 @@ document.addEventListener('DOMContentLoaded', () => {
       mobilityData: hasPose ? mobilityResult : null,
       kineticChainData: hasPose ? kineticChainResult : null
     });
+
+    // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
+    if (hasPose) {
+      if (barbellRadarResult) {
+        telemetryHud.drawBarbellRadar(hudRenderer.ctx, barbellRadarResult, hudRenderer.logicalWidth, hudRenderer.logicalHeight, performance.now());
+      }
+      if (kineticTelemetryResult) {
+        telemetryHud.drawMetricsCard(hudRenderer.ctx, kineticTelemetryResult, hudRenderer.logicalWidth, hudRenderer.logicalHeight, performance.now());
+      }
+    }
   });
 
   /**
@@ -1427,6 +1456,8 @@ document.addEventListener('DOMContentLoaded', () => {
     valsalvaMonitor.reset();
     mobilityEngine.reset();
     kineticChainEngine.reset();
+    barbellRadar.reset();
+    kineticTelemetry.reset();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
       if (micActive) {
@@ -1499,6 +1530,8 @@ document.addEventListener('DOMContentLoaded', () => {
     valsalvaMonitor.stop();
     mobilityEngine.reset();
     kineticChainEngine.reset();
+    barbellRadar.reset();
+    kineticTelemetry.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
