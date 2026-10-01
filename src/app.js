@@ -51,6 +51,8 @@ import { KineticChainEngine } from './core/kineticChainEngine.js';
 import { BarbellRadar } from './core/barbellRadar.js';
 import { KineticTelemetry } from './core/kineticTelemetry.js';
 import { TelemetryHud } from './ui/telemetryHud.js';
+import { VoiceCommander } from './input/voiceCommander.js';
+import { FaultDvr } from './media/faultDvr.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -151,12 +153,71 @@ document.addEventListener('DOMContentLoaded', () => {
   const barbellRadar = new BarbellRadar();
   const kineticTelemetry = new KineticTelemetry();
   const telemetryHud = new TelemetryHud();
+  const voiceCommander = new VoiceCommander();
+  const faultDvr = new FaultDvr();
+  let lastFaultReplayTriggerTime = 0;
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
   let lastMobilityAlertTime = 0;
   let lastFrameTimestamp = 0;
   let isTwinActive = true;
   let currentStrainData = null;
+
+  // Wire Hands-Free Voice Commands to StateMachine and workout lifecycle
+  voiceCommander.on('START_SET', () => {
+    writeLog('🎙️ [VOICE] "START SET" recognized');
+    if (!isTrackingActive) {
+      startBtn.click();
+    } else if (isTrackingPaused) {
+      isTrackingPaused = false;
+      voiceCoach.speakPhrase(PhraseKey.WORKOUT_RESUMED);
+      writeLog('▶️ [Voice] Workout Resumed.');
+    }
+  });
+
+  voiceCommander.on('STOP_SET', () => {
+    writeLog('🎙️ [VOICE] "STOP SET / RACK" recognized');
+    if (isTrackingActive) {
+      stopBtn.click();
+    }
+  });
+
+  voiceCommander.on('RESET_SESSION', () => {
+    writeLog('🎙️ [VOICE] "RESET SESSION" recognized');
+    stateMachine.reset();
+    lastRepCount = 0;
+    lastState = 'IDLE';
+    completedReps = [];
+    repVelocities = [];
+    symmetrySamples = [];
+    fullSessionPath = [];
+    currentRepHasFault = false;
+    currentRepMinAngle = 180;
+    initiatedRep = false;
+    updateFloatingHUD(0, 'STANDBY', false);
+    faultDvr.clear();
+    hudRenderer.clear();
+    writeLog('🔄 Session counters and telemetry reset.');
+  });
+
+  voiceCommander.on('PLAY_REPLAY', () => {
+    writeLog('🎙️ [VOICE] "PLAY REPLAY" recognized - triggering slow-mo fault playback (0.25x)');
+    faultDvr.triggerReplay();
+  });
+
+  voiceCommander.on('SWITCH_EXERCISE', (payload) => {
+    if (payload && payload.exercise) {
+      writeLog(`🎙️ [VOICE] Switching exercise to ${payload.exercise}`);
+      switchExercise(payload.exercise, false);
+      if (exerciseSelect) {
+        exerciseSelect.value = payload.exercise;
+      }
+    }
+  });
+
+  voiceCommander.on('STATUS_CHANGE', ({ status }) => {
+    writeLog(`🎙️ [VOICE STATUS] ${status}`);
+  });
 
   // Bind Clinical Biomechanics Laboratory Report Exporter
   summaryModal.setOnDownloadReport(async (sessionData) => {
@@ -555,6 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
     kineticChainEngine.reset();
     barbellRadar.reset();
     kineticTelemetry.reset();
+    faultDvr.clear();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
@@ -1197,6 +1259,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fsm.hasFault) {
           currentRepHasFault = true;
           rhythmGame.breakCombo();
+
+          // Trigger In-Memory Slow-Motion Fault DVR Replay on fault detection (0.25x slow-mo)
+          const nowMs = performance.now();
+          if (nowMs - lastFaultReplayTriggerTime > 3000) {
+            lastFaultReplayTriggerTime = nowMs;
+            faultDvr.triggerReplay();
+            writeLog(`📹 [DVR] Slow-mo fault replay triggered [0.25x]: ${fsm.faultMessage || 'FORM FAULT'}`);
+          }
         }
 
         // Voice coaching triggers for partial range of motion
@@ -1386,7 +1456,9 @@ document.addEventListener('DOMContentLoaded', () => {
       barbellData: hasPose ? barbellResult : null,
       valsalvaData: hasPose ? valsalvaResult : null,
       mobilityData: hasPose ? mobilityResult : null,
-      kineticChainData: hasPose ? kineticChainResult : null
+      kineticChainData: hasPose ? kineticChainResult : null,
+      voiceStatus: voiceCommander.getStatusText(),
+      dvrReplay: faultDvr.getCurrentReplayFrame(performance.now())
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1398,6 +1470,13 @@ document.addEventListener('DOMContentLoaded', () => {
         telemetryHud.drawMetricsCard(hudRenderer.ctx, kineticTelemetryResult, hudRenderer.logicalWidth, hudRenderer.logicalHeight, performance.now());
       }
     }
+
+    // In-Memory Slow-Motion Fault DVR: push live rendered frame into 90-frame ring buffer
+    faultDvr.pushFrame(canvas, {
+      faultMessage: fsm.hasFault ? fsm.faultMessage : (spineResult?.status === 'CRITICAL_FLEXION' ? 'LUMBAR SHEAR' : null),
+      activeAngle: currentAngle,
+      landmarks: hasPose ? landmarks : null
+    });
   });
 
   /**
@@ -1458,6 +1537,8 @@ document.addEventListener('DOMContentLoaded', () => {
     kineticChainEngine.reset();
     barbellRadar.reset();
     kineticTelemetry.reset();
+    faultDvr.clear();
+    voiceCommander.start();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
       if (micActive) {
@@ -1532,6 +1613,8 @@ document.addEventListener('DOMContentLoaded', () => {
     kineticChainEngine.reset();
     barbellRadar.reset();
     kineticTelemetry.reset();
+    faultDvr.clear();
+    voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;

@@ -217,11 +217,24 @@ export class HUDRenderer {
     barbellData = null,
     valsalvaData = null,
     mobilityData = null,
-    kineticChainData = null
+    kineticChainData = null,
+    voiceStatus = null,
+    dvrReplay = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
+      if (voiceStatus || dvrReplay) {
+        this.ctx.save();
+        this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
+        if (voiceStatus) {
+          this.drawVoiceIndicator(this.ctx, voiceStatus, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (dvrReplay) {
+          this.drawDvrWindow(this.ctx, dvrReplay, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        this.ctx.restore();
+      }
       return;
     }
 
@@ -427,6 +440,16 @@ export class HUDRenderer {
     // 34. Kinetic Chain Sequencing Telemetry Card & Waterfall Graph
     if (kineticChainData) {
       this._renderKineticChainCard(kineticChainData, width, height, now);
+    }
+
+    // 35. Voice Command Mic Status Indicator (Top-Left HUD)
+    if (voiceStatus) {
+      this.drawVoiceIndicator(this.ctx, voiceStatus, width, height, now);
+    }
+
+    // 36. Slow-Motion Fault Replay DVR Window (Lower-Left PiP)
+    if (dvrReplay) {
+      this.drawDvrWindow(this.ctx, dvrReplay, width, height, now);
     }
 
     this.ctx.restore();
@@ -4203,5 +4226,256 @@ export class HUDRenderer {
 
     ctx.restore();
   }
+
+  /**
+   * Renders the top-left Voice Command Mic status badge:
+   * 'VOICE: ACTIVE [LISTENING]'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {string|Object} [voiceStatus='ACTIVE [LISTENING]']
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawVoiceIndicator(ctx = this.ctx, voiceStatus = 'ACTIVE [LISTENING]', canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx) return;
+
+    const statusText = typeof voiceStatus === 'object' && voiceStatus ? (voiceStatus.status || 'ACTIVE [LISTENING]') : String(voiceStatus || 'ACTIVE [LISTENING]');
+    const isListening = statusText.includes('ACTIVE') || statusText.includes('LISTENING');
+    const isError = statusText.includes('ERROR') || statusText.includes('UNSUPPORTED');
+
+    const badgeW = 168;
+    const badgeH = 22;
+    // Mirrored display: (canvasWidth - badgeW - 20) places it on visual TOP-LEFT of screen
+    const x = canvasWidth - badgeW - 20;
+    const y = 14;
+
+    ctx.save();
+
+    const themeColor = isError ? '#ff0055' : (isListening ? '#00ff87' : '#94a3b8');
+    const pulse = isListening ? (0.7 + 0.3 * Math.sin(now / 140)) : 0.4;
+
+    // 1. Badge Pill Background
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.88)';
+    ctx.strokeStyle = isListening ? `rgba(0, 255, 135, ${pulse.toFixed(2)})` : 'rgba(148, 163, 184, 0.35)';
+    ctx.lineWidth = isListening ? 1.5 : 1.0;
+    ctx.shadowBlur = isListening ? 8 : 0;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 11);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Microphone indicator node / pulsing audio wave dot
+    const micX = x + 12;
+    const micY = y + (badgeH / 2);
+    ctx.beginPath();
+    ctx.arc(micX, micY, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.shadowBlur = isListening ? 6 : 0;
+    ctx.fill();
+
+    if (isListening) {
+      ctx.beginPath();
+      ctx.arc(micX, micY, 3.5 + 4 * (1 - pulse), 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0, 255, 135, ${(0.8 * pulse).toFixed(2)})`;
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    }
+
+    // 3. Status text: 'VOICE: ACTIVE [LISTENING]'
+    const displayText = statusText.startsWith('VOICE:') ? statusText : `VOICE: ${statusText}`;
+    this._drawUnmirroredText(
+      displayText,
+      x + 24,
+      y + (badgeH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders a floating glassmorphic Picture-in-Picture window in the lower-left:
+   * - Header: 'SLOW-MO FAULT REPLAY [0.25x]'
+   * - Border: Pulsing Amber/Crimson outline
+   * - Draws captured replay frame with frozen fault vectors
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx] Target drawing context.
+   * @param {Object|ImageBitmap} replayFrame Captured replay snapshot or frame object.
+   * @param {number} [canvasWidth=this.logicalWidth] Logical canvas width.
+   * @param {number} [canvasHeight=this.logicalHeight] Logical canvas height.
+   * @param {number} [now=performance.now()] High-resolution timestamp.
+   */
+  drawDvrWindow(ctx = this.ctx, replayFrame, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !replayFrame) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const h = canvasHeight || this.logicalHeight || 480;
+
+    const bitmap = (replayFrame && replayFrame.bitmap !== undefined) ? replayFrame.bitmap : (replayFrame instanceof ImageBitmap ? replayFrame : null);
+    const telemetry = (replayFrame && replayFrame.telemetry) ? replayFrame.telemetry : null;
+    const progress = (replayFrame && typeof replayFrame.progress === 'number') ? replayFrame.progress : 0.5;
+    const frameIndex = (replayFrame && replayFrame.frameIndex) || 1;
+    const totalFrames = (replayFrame && replayFrame.totalFrames) || 90;
+
+    // PiP Dimensions (floating in visual lower-left)
+    const pipW = 184;
+    const pipH = 142;
+    // Mirrored display: (w - pipW - 18) places it on visual LOWER-LEFT of screen
+    const x = w - pipW - 18;
+    const y = h - pipH - 24;
+
+    ctx.save();
+
+    // 1. Pulsing Amber / Crimson outline
+    const pulsePhase = (now / 120);
+    const pulse = 0.65 + 0.35 * Math.sin(pulsePhase);
+    const themeColor = Math.sin(pulsePhase) > 0 ? '#ff0055' : '#f59e0b';
+    const borderColor = `rgba(255, 0, 85, ${pulse.toFixed(2)})`;
+
+    // 2. Glassmorphic Card Container
+    ctx.fillStyle = 'rgba(8, 12, 22, 0.92)';
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 1.8;
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, pipW, pipH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 3. Header: SLOW-MO FAULT REPLAY [0.25x]
+    const headerY = y + 12;
+    const textCenterX = x + (pipW / 2);
+
+    ctx.beginPath();
+    ctx.arc(x + 12, headerY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.shadowBlur = 6;
+    ctx.fill();
+
+    this._drawUnmirroredText(
+      'SLOW-MO FAULT REPLAY [0.25x]',
+      textCenterX + 4,
+      headerY,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    // 4. Inner Replay Viewport
+    const viewMargin = 8;
+    const viewX = x + viewMargin;
+    const viewY = y + 24;
+    const viewW = pipW - (viewMargin * 2);
+    const viewH = pipH - 44;
+
+    ctx.save();
+    this._drawRoundedRect(ctx, viewX, viewY, viewW, viewH, 4);
+    ctx.clip();
+
+    ctx.fillStyle = '#020611';
+    ctx.fillRect(viewX, viewY, viewW, viewH);
+
+    if (bitmap && typeof bitmap.width === 'number' && bitmap.width > 0) {
+      try {
+        ctx.drawImage(bitmap, viewX, viewY, viewW, viewH);
+      } catch (e) {}
+    } else {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.fillRect(viewX, viewY, viewW, viewH);
+      this._drawUnmirroredText(
+        'BUFFERING DVR FRAME...',
+        viewX + (viewW / 2),
+        viewY + (viewH / 2),
+        '6.5px "Orbitron", monospace',
+        '#64748b',
+        'center'
+      );
+    }
+
+    // Scanlines
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+    for (let sl = viewY; sl < viewY + viewH; sl += 3) {
+      ctx.fillRect(viewX, sl, viewW, 1);
+    }
+
+    // 5. Draw Frozen Fault Vectors & Kinematic Telemetry Overlay
+    if (telemetry) {
+      const faultMsg = telemetry.faultMessage || telemetry.error || 'BIOMECHANICAL FAULT';
+      const angle = telemetry.activeAngle ? `${Math.round(telemetry.activeAngle)}°` : '';
+
+      ctx.fillStyle = 'rgba(255, 0, 85, 0.28)';
+      ctx.fillRect(viewX, viewY, viewW, 14);
+
+      this._drawUnmirroredText(
+        `⚠️ ${faultMsg} ${angle}`,
+        viewX + (viewW / 2),
+        viewY + 7,
+        'bold 6.5px "Orbitron", monospace',
+        '#ffffff',
+        'center'
+      );
+
+      if (telemetry.landmarks && telemetry.landmarks.length > 0) {
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#ff0055';
+        ctx.shadowColor = '#ff0055';
+        ctx.shadowBlur = 4;
+
+        const lm = telemetry.landmarks;
+        const drawPipeLine = (i1, i2) => {
+          if (lm[i1] && lm[i2] && lm[i1].visibility > 0.4 && lm[i2].visibility > 0.4) {
+            ctx.beginPath();
+            ctx.moveTo(viewX + (lm[i1].x * viewW), viewY + (lm[i1].y * viewH));
+            ctx.lineTo(viewX + (lm[i2].x * viewW), viewY + (lm[i2].y * viewH));
+            ctx.stroke();
+          }
+        };
+
+        drawPipeLine(11, 23);
+        drawPipeLine(12, 24);
+        drawPipeLine(23, 25);
+        drawPipeLine(25, 27);
+        drawPipeLine(24, 26);
+        drawPipeLine(26, 28);
+        ctx.restore();
+      }
+    }
+
+    ctx.restore();
+
+    // 6. Scrubbing Timeline Progress Bar
+    const progTrackY = y + pipH - 12;
+    const progTrackW = pipW - 16;
+    const progTrackX = x + 8;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    this._drawRoundedRect(ctx, progTrackX, progTrackY, progTrackW, 3, 1.5);
+    ctx.fill();
+
+    const filledW = Math.max(3, progTrackW * Math.min(1.0, progress));
+    ctx.fillStyle = themeColor;
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = themeColor;
+    this._drawRoundedRect(ctx, progTrackX, progTrackY, filledW, 3, 1.5);
+    ctx.fill();
+
+    this._drawUnmirroredText(
+      `${frameIndex}/${totalFrames}`,
+      x + pipW - 10,
+      progTrackY - 4,
+      '6px "Orbitron", monospace',
+      '#94a3b8',
+      'right'
+    );
+
+    ctx.restore();
+  }
 }
+
 
