@@ -219,12 +219,14 @@ export class HUDRenderer {
     mobilityData = null,
     kineticChainData = null,
     voiceStatus = null,
-    dvrReplay = null
+    dvrReplay = null,
+    transverseData = null,
+    imuStatus = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay) {
+      if (voiceStatus || dvrReplay || imuStatus) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
@@ -232,6 +234,9 @@ export class HUDRenderer {
         }
         if (dvrReplay) {
           this.drawDvrWindow(this.ctx, dvrReplay, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (imuStatus) {
+          this.drawImuStatus(this.ctx, imuStatus, this.logicalWidth, this.logicalHeight, performance.now());
         }
         this.ctx.restore();
       }
@@ -450,6 +455,16 @@ export class HUDRenderer {
     // 36. Slow-Motion Fault Replay DVR Window (Lower-Left PiP)
     if (dvrReplay) {
       this.drawDvrWindow(this.ctx, dvrReplay, width, height, now);
+    }
+
+    // 37. Transverse Gyro HUD Compass (Upper-Left Radar Disc)
+    if (transverseData) {
+      this.drawTransverseCompass(this.ctx, transverseData, width, height, now);
+    }
+
+    // 38. IMU Hardware Sensor Stabilization Status (Bottom-Left Pill Badge)
+    if (imuStatus) {
+      this.drawImuStatus(this.ctx, imuStatus, width, height, now);
     }
 
     this.ctx.restore();
@@ -4472,6 +4487,233 @@ export class HUDRenderer {
       '6px "Orbitron", monospace',
       '#94a3b8',
       'right'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the aerial top-down Transverse Gyro HUD Compass in the upper-left corner.
+   * Shows the lifter's pelvic orientation relative to the camera plane.
+   * - Normal (|theta| <= 3 deg): Glowing cyan alignment marker.
+   * - Asymmetric (|theta| > 3 deg): Pulsing amber chevron showing rotation direction
+   *   ('TWIST: +5.4° RIGHT HIP BACK').
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx] Target drawing context.
+   * @param {Object} transverseData Output from TransverseAnalyzer.
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawTransverseCompass(ctx = this.ctx, transverseData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !transverseData || !transverseData.isVisible) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const cardW = 168;
+    const cardH = 92;
+    // Mirrored display: (w - cardW - 20) places it on visual TOP-LEFT of screen
+    const x = w - cardW - 20;
+    const y = 84; // Stacked cleanly below top status badges
+
+    const pelvicYaw = typeof transverseData.pelvicYawDeg === 'number' ? transverseData.pelvicYawDeg : 0;
+    const isAsymmetric = Boolean(transverseData.isAsymmetric);
+    const twistLabel = transverseData.twistLabel || (isAsymmetric ? `TWIST: ${pelvicYaw.toFixed(1)}°` : `ALIGNED: ${Math.abs(pelvicYaw).toFixed(1)}°`);
+
+    ctx.save();
+
+    const themeColor = isAsymmetric ? '#f59e0b' : '#00f2fe';
+    const glowColor = isAsymmetric ? '#f59e0b' : '#00ff87';
+    const borderPulse = isAsymmetric ? (0.65 + 0.35 * Math.sin(now / 90)) : 0.35;
+
+    // 1. Glassmorphic Card Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = isAsymmetric ? `rgba(245, 158, 11, ${borderPulse.toFixed(2)})` : 'rgba(0, 242, 254, 0.40)';
+    ctx.lineWidth = isAsymmetric ? 1.8 : 1.2;
+    ctx.shadowBlur = isAsymmetric ? 12 : 6;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Header (Unmirrored for left-to-right reading)
+    const textCenterX = x + (cardW / 2);
+    this._drawUnmirroredText(
+      isAsymmetric ? '⚠️ TRANSVERSE ASYMMETRY' : 'TRANSVERSE GYRO COMPASS',
+      textCenterX,
+      y + 11,
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    // 3. Aerial Top-Down Radar Disc
+    const radarCX = x + (cardW / 2);
+    const radarCY = y + 42;
+    const radarR = 21;
+
+    // Disc background
+    ctx.beginPath();
+    ctx.arc(radarCX, radarCY, radarR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(3, 8, 18, 0.85)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = 0;
+    ctx.fill();
+    ctx.stroke();
+
+    // Concentric guideline & camera plane crosshair
+    ctx.beginPath();
+    ctx.arc(radarCX, radarCY, radarR * 0.55, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0, 242, 254, 0.18)';
+    ctx.stroke();
+
+    // Camera axis (horizontal baseline)
+    ctx.beginPath();
+    ctx.moveTo(radarCX - radarR + 2, radarCY);
+    ctx.lineTo(radarCX + radarR - 2, radarCY);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+    ctx.setLineDash([2, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 4. Rotating Pelvic Axis Bar & Endcaps
+    ctx.save();
+    ctx.translate(radarCX, radarCY);
+    // Rotate by -pelvicYaw radians (mapping Z disparity into top-down rotation)
+    const yawRad = (pelvicYaw * Math.PI) / 180;
+    ctx.rotate(-yawRad);
+
+    const barHalfLen = radarR - 4;
+    ctx.beginPath();
+    ctx.moveTo(-barHalfLen, 0);
+    ctx.lineTo(barHalfLen, 0);
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = isAsymmetric ? 2.5 : 2.0;
+    ctx.shadowBlur = isAsymmetric ? 10 : 6;
+    ctx.shadowColor = glowColor;
+    ctx.stroke();
+
+    // Dual Hip Nodes (Left & Right hip markers)
+    ctx.beginPath();
+    ctx.arc(-barHalfLen, 0, 2.5, 0, Math.PI * 2);
+    ctx.arc(barHalfLen, 0, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = isAsymmetric ? '#f59e0b' : '#00ff87';
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = glowColor;
+    ctx.fill();
+
+    // 5. Directional Amber Chevron if Asymmetric (> 3 deg)
+    if (isAsymmetric) {
+      const dirSign = pelvicYaw > 0 ? 1 : -1;
+      const chX = dirSign * (barHalfLen + 2);
+      ctx.beginPath();
+      ctx.moveTo(chX - (dirSign * 4), -4);
+      ctx.lineTo(chX, 0);
+      ctx.lineTo(chX - (dirSign * 4), 4);
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+
+    ctx.restore(); // Exit radar transform
+
+    // 6. Readout Pill Footer: TWIST: +5.4° RIGHT HIP BACK
+    const pillW = cardW - 14;
+    const pillH = 17;
+    const pillX = x + 7;
+    const pillY = y + cardH - 22;
+
+    ctx.fillStyle = isAsymmetric ? 'rgba(30, 18, 5, 0.88)' : 'rgba(5, 14, 24, 0.75)';
+    ctx.strokeStyle = isAsymmetric ? '#f59e0b' : 'rgba(0, 242, 254, 0.35)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = isAsymmetric ? 6 : 0;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    this._drawUnmirroredText(
+      twistLabel,
+      textCenterX,
+      pillY + (pillH / 2),
+      'bold 6.8px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the bottom-left IMU status pill badge:
+   * 'STABILIZATION: HARDWARE IMU ACTIVE' or 'STABILIZATION: BYPASS'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx] Target drawing context.
+   * @param {string} [imuStatus='STABILIZATION: HARDWARE IMU ACTIVE'] Status string.
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawImuStatus(ctx = this.ctx, imuStatus = 'STABILIZATION: HARDWARE IMU ACTIVE', canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const h = canvasHeight || this.logicalHeight || 480;
+
+    const statusText = String(imuStatus || 'STABILIZATION: HARDWARE IMU ACTIVE');
+    const isActive = statusText.includes('ACTIVE');
+
+    const badgeW = 196;
+    const badgeH = 20;
+    // Mirrored display: (w - badgeW - 20) places it on visual LOWER-LEFT of screen
+    const x = w - badgeW - 20;
+    const y = h - 28; // Bottom-left corner
+
+    ctx.save();
+
+    const themeColor = isActive ? '#00ff87' : '#94a3b8';
+    const pulse = isActive ? (0.70 + 0.30 * Math.sin(now / 150)) : 0.40;
+
+    // 1. Badge Pill Background
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.88)';
+    ctx.strokeStyle = isActive ? `rgba(0, 255, 135, ${pulse.toFixed(2)})` : 'rgba(148, 163, 184, 0.35)';
+    ctx.lineWidth = isActive ? 1.4 : 1.0;
+    ctx.shadowBlur = isActive ? 8 : 0;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Hardware Gyro / Sensor Pulse Indicator Node
+    const nodeX = x + 12;
+    const nodeY = y + (badgeH / 2);
+
+    ctx.beginPath();
+    ctx.arc(nodeX, nodeY, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.shadowBlur = isActive ? 6 : 0;
+    ctx.shadowColor = themeColor;
+    ctx.fill();
+
+    if (isActive) {
+      ctx.beginPath();
+      ctx.arc(nodeX, nodeY, 3.2 + 3.5 * (1 - pulse), 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0, 255, 135, ${(0.75 * pulse).toFixed(2)})`;
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    }
+
+    // 3. Status text
+    this._drawUnmirroredText(
+      statusText,
+      x + 22,
+      y + (badgeH / 2),
+      'bold 6.8px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
     );
 
     ctx.restore();

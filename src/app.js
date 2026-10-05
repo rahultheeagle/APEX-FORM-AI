@@ -53,6 +53,8 @@ import { KineticTelemetry } from './core/kineticTelemetry.js';
 import { TelemetryHud } from './ui/telemetryHud.js';
 import { VoiceCommander } from './input/voiceCommander.js';
 import { FaultDvr } from './media/faultDvr.js';
+import { ImuStabilizer } from './sensors/imuStabilizer.js';
+import { TransverseAnalyzer } from './core/transverseAnalyzer.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -155,6 +157,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const telemetryHud = new TelemetryHud();
   const voiceCommander = new VoiceCommander();
   const faultDvr = new FaultDvr();
+  const imuStabilizer = new ImuStabilizer();
+  const transverseAnalyzer = new TransverseAnalyzer();
   let lastFaultReplayTriggerTime = 0;
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
@@ -617,6 +621,8 @@ document.addEventListener('DOMContentLoaded', () => {
     barbellRadar.reset();
     kineticTelemetry.reset();
     faultDvr.clear();
+    transverseAnalyzer.reset();
+    imuStabilizer.recalibrateBaseline();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
@@ -680,7 +686,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const rawLandmarks = results.poseLandmarks;
     const candidates = results.multiPoseLandmarks || results.allPoses || rawLandmarks;
     const isolatedLandmarks = personTracker.filterFrame(candidates);
-    const landmarks = isolatedLandmarks || rawLandmarks;
+    const candidateLandmarks = isolatedLandmarks || rawLandmarks;
+    const stabilizedLandmarks = imuStabilizer.correctLandmarks(candidateLandmarks);
+    const landmarks = stabilizedLandmarks || candidateLandmarks;
     const worldLandmarks = results.poseWorldLandmarks || landmarks;
     const hasPose = !!(landmarks && landmarks.length > 0);
     const newState = hasPose ? 'detected' : 'searching';
@@ -713,6 +721,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let kineticChainResult = null;
     let barbellRadarResult = null;
     let kineticTelemetryResult = null;
+    let transverseResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -1209,6 +1218,9 @@ document.addEventListener('DOMContentLoaded', () => {
           : (wristMidpoint ? wristMidpoint.y : (selectedVertex ? selectedVertex.y : (centerOfMass ? centerOfMass.y : 0.5)));
         kineticTelemetryResult = kineticTelemetry.update(trackingKinematicY, nowMs, isConcentricAscent, fsm.repCount);
 
+        // 3D Transverse Pelvic Yaw Engine & Spinal Twist Asymmetry
+        transverseResult = transverseAnalyzer.evaluateTransverseAsymmetry(activeLandmarks);
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1458,7 +1470,9 @@ document.addEventListener('DOMContentLoaded', () => {
       mobilityData: hasPose ? mobilityResult : null,
       kineticChainData: hasPose ? kineticChainResult : null,
       voiceStatus: voiceCommander.getStatusText(),
-      dvrReplay: faultDvr.getCurrentReplayFrame(performance.now())
+      dvrReplay: faultDvr.getCurrentReplayFrame(performance.now()),
+      transverseData: hasPose ? transverseResult : null,
+      imuStatus: imuStabilizer.getStatusText()
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1538,6 +1552,8 @@ document.addEventListener('DOMContentLoaded', () => {
     barbellRadar.reset();
     kineticTelemetry.reset();
     faultDvr.clear();
+    transverseAnalyzer.reset();
+    imuStabilizer.recalibrateBaseline();
     voiceCommander.start();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
@@ -1614,6 +1630,8 @@ document.addEventListener('DOMContentLoaded', () => {
     barbellRadar.reset();
     kineticTelemetry.reset();
     faultDvr.clear();
+    transverseAnalyzer.reset();
+    imuStabilizer.stopListening();
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -1657,6 +1675,7 @@ document.addEventListener('DOMContentLoaded', () => {
   startBtn.addEventListener('click', async () => {
     soundEngine.unlockContext();
     voiceCoach.speakPhrase(PhraseKey.WORKOUT_STARTED);
+    imuStabilizer.init().catch(() => {});
     
     writeLog('Acquiring camera optical feed...');
     startBtn.disabled = true;
