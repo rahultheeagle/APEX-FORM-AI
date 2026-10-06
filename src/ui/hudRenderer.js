@@ -221,22 +221,30 @@ export class HUDRenderer {
     voiceStatus = null,
     dvrReplay = null,
     transverseData = null,
-    imuStatus = null
+    imuStatus = null,
+    sscData = null,
+    efficiencyData = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay || imuStatus) {
+      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
           this.drawVoiceIndicator(this.ctx, voiceStatus, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (efficiencyData) {
+          this.drawBarEfficiencyBadge(this.ctx, efficiencyData, this.logicalWidth, this.logicalHeight, performance.now());
         }
         if (dvrReplay) {
           this.drawDvrWindow(this.ctx, dvrReplay, this.logicalWidth, this.logicalHeight, performance.now());
         }
         if (imuStatus) {
           this.drawImuStatus(this.ctx, imuStatus, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (sscData) {
+          this.drawSscAmortizationMeter(this.ctx, sscData, this.logicalWidth, this.logicalHeight, performance.now());
         }
         this.ctx.restore();
       }
@@ -465,6 +473,16 @@ export class HUDRenderer {
     // 38. IMU Hardware Sensor Stabilization Status (Bottom-Left Pill Badge)
     if (imuStatus) {
       this.drawImuStatus(this.ctx, imuStatus, width, height, now);
+    }
+
+    // 39. Tendon Stretch-Shortening Cycle (SSC) Amortization Meter (Bottom-Center Cyber Dial)
+    if (sscData) {
+      this.drawSscAmortizationMeter(this.ctx, sscData, width, height, now);
+    }
+
+    // 40. Bar Path Mechanical Efficiency Ratio (MER) Badge (Upper-Left Pill Card)
+    if (efficiencyData) {
+      this.drawBarEfficiencyBadge(this.ctx, efficiencyData, width, height, now);
     }
 
     this.ctx.restore();
@@ -4709,6 +4727,180 @@ export class HUDRenderer {
     // 3. Status text
     this._drawUnmirroredText(
       statusText,
+      x + 22,
+      y + (badgeH / 2),
+      'bold 6.8px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the bottom-center Stretch-Shortening Cycle (SSC) Amortization Cyber Dial:
+   * 'AMORTIZATION: 142ms [EXPLOSIVE RECOIL]'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [sscData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawSscAmortizationMeter(ctx = this.ctx, sscData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !sscData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const h = canvasHeight || this.logicalHeight || 480;
+
+    const ms = typeof sscData.amortizationMs === 'number' ? sscData.amortizationMs : 0;
+    const rating = sscData.elasticityRating || 'STANDBY';
+    const isAmortizing = Boolean(sscData.isAmortizing);
+    const score = typeof sscData.recoilScore === 'number' ? sscData.recoilScore : 100;
+    const label = sscData.displayLabel || (ms > 0 ? `AMORTIZATION: ${ms}ms [${rating.replace('_', ' ')}]` : 'AMORTIZATION: STANDBY');
+
+    const cardW = 246;
+    const cardH = 34;
+    const x = (w - cardW) / 2;
+    const y = h - cardH - 12;
+
+    ctx.save();
+
+    let themeColor = '#00f2fe';
+    if (rating === 'HIGH_ELASTICITY') {
+      themeColor = '#00ff87';
+    } else if (rating === 'MODERATE') {
+      themeColor = '#f59e0b';
+    } else if (rating === 'DISSIPATED') {
+      themeColor = '#ff0055';
+    }
+
+    const pulse = isAmortizing ? (0.70 + 0.30 * Math.sin(now / 90)) : 0.40;
+
+    // 1. Cyber Dial Card Background
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = isAmortizing ? `rgba(0, 255, 135, ${pulse.toFixed(2)})` : `rgba(${rating === 'HIGH_ELASTICITY' ? '0, 255, 135' : (rating === 'DISSIPATED' ? '255, 0, 85' : '0, 242, 254')}, 0.40)`;
+    ctx.lineWidth = isAmortizing ? 1.8 : 1.2;
+    ctx.shadowBlur = isAmortizing ? 12 : 6;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Mini Cyber Radial Arc Dial
+    const dialCX = x + 20;
+    const dialCY = y + (cardH / 2);
+    const dialR = 10;
+
+    // Background track arc
+    ctx.beginPath();
+    ctx.arc(dialCX, dialCY, dialR, -Math.PI * 0.75, Math.PI * 0.75);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Active speed/recoil arc (higher recoil score = fuller arc)
+    const arcRatio = Math.max(0.08, Math.min(1.0, score / 100));
+    const arcEnd = -Math.PI * 0.75 + (arcRatio * (1.5 * Math.PI));
+    ctx.beginPath();
+    ctx.arc(dialCX, dialCY, dialR, -Math.PI * 0.75, arcEnd);
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 2.6;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = themeColor;
+    ctx.stroke();
+
+    // Center pulse dot
+    ctx.beginPath();
+    ctx.arc(dialCX, dialCY, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.fill();
+
+    // 3. Unmirrored Readout Text
+    const textCenterX = x + (cardW / 2) + 10;
+    this._drawUnmirroredText(
+      label,
+      textCenterX,
+      y + (cardH / 2),
+      'bold 7.5px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the upper-left Bar Efficiency Badge:
+   * 'BAR EFFICIENCY: 94.2% [VERTICAL GROOVE]'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [efficiencyData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawBarEfficiencyBadge(ctx = this.ctx, efficiencyData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !efficiencyData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const mer = typeof efficiencyData.merPercent === 'number' ? efficiencyData.merPercent : 100.0;
+    const rating = efficiencyData.rating || (mer >= 90 ? 'VERTICAL GROOVE' : (mer >= 80 ? 'MODERATE SWAY' : 'EXCESSIVE DRIFT'));
+    const label = efficiencyData.displayLabel || `BAR EFFICIENCY: ${mer.toFixed(1)}% [${rating}]`;
+
+    const badgeW = 196;
+    const badgeH = 24;
+    // Mirrored display: (w - badgeW - 20) places it on visual UPPER-LEFT of screen
+    // Placed at y = 46 (stacked between Voice Indicator at y=14 and Transverse Compass at y=84)
+    const x = w - badgeW - 20;
+    const y = 46;
+
+    ctx.save();
+
+    let themeColor = '#00ff87';
+    if (mer < 80.0) {
+      themeColor = '#ff0055';
+    } else if (mer < 90.0) {
+      themeColor = '#f59e0b';
+    }
+
+    const pulse = mer < 80.0 ? (0.65 + 0.35 * Math.sin(now / 100)) : 0.40;
+
+    // 1. Glassmorphic Pill Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.88)';
+    ctx.strokeStyle = mer < 80.0 ? `rgba(255, 0, 85, ${pulse.toFixed(2)})` : `rgba(${mer >= 90 ? '0, 255, 135' : '245, 158, 11'}, 0.45)`;
+    ctx.lineWidth = mer < 80.0 ? 1.6 : 1.2;
+    ctx.shadowBlur = mer < 80.0 ? 10 : 5;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Vertical Line Groove Icon
+    const iconX = x + 12;
+    const iconY = y + (badgeH / 2);
+
+    ctx.beginPath();
+    ctx.moveTo(iconX, iconY - 6);
+    ctx.lineTo(iconX, iconY + 6);
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 2.0;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Small arrow or crosshair marks
+    ctx.beginPath();
+    ctx.arc(iconX, iconY, 2.0, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // 3. Unmirrored Readout Text
+    this._drawUnmirroredText(
+      label,
       x + 22,
       y + (badgeH / 2),
       'bold 6.8px "Orbitron", -apple-system, sans-serif',

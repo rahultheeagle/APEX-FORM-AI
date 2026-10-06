@@ -55,6 +55,9 @@ import { VoiceCommander } from './input/voiceCommander.js';
 import { FaultDvr } from './media/faultDvr.js';
 import { ImuStabilizer } from './sensors/imuStabilizer.js';
 import { TransverseAnalyzer } from './core/transverseAnalyzer.js';
+import { SscEngine } from './core/sscEngine.js';
+import { BarEfficiencyEngine } from './core/barEfficiencyEngine.js';
+import { ReflexAudio } from './audio/reflexAudio.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -159,6 +162,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const faultDvr = new FaultDvr();
   const imuStabilizer = new ImuStabilizer();
   const transverseAnalyzer = new TransverseAnalyzer();
+  const sscEngine = new SscEngine();
+  const barEfficiencyEngine = new BarEfficiencyEngine();
+  const reflexAudio = new ReflexAudio();
+  let currentRepTrajectory = [];
   let lastFaultReplayTriggerTime = 0;
   let lastCriticalStallTime = 0;
   let lastSpineAlertTime = 0;
@@ -623,6 +630,9 @@ document.addEventListener('DOMContentLoaded', () => {
     faultDvr.clear();
     transverseAnalyzer.reset();
     imuStabilizer.recalibrateBaseline();
+    sscEngine.reset();
+    barEfficiencyEngine.reset();
+    currentRepTrajectory = [];
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
@@ -722,6 +732,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let barbellRadarResult = null;
     let kineticTelemetryResult = null;
     let transverseResult = null;
+    let sscResult = null;
+    let barEfficiencyResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -1076,6 +1088,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Play laser depth hit chime on initial breach
       if (isLaserTriggered && !lastLaserTriggered && isTrackingActive) {
         soundEngine.playDepthChime(880);
+        reflexAudio.playDepthHit();
       }
       lastLaserTriggered = isLaserTriggered;
 
@@ -1221,6 +1234,31 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3D Transverse Pelvic Yaw Engine & Spinal Twist Asymmetry
         transverseResult = transverseAnalyzer.evaluateTransverseAsymmetry(activeLandmarks);
 
+        // Tendon Stretch-Shortening Cycle (SSC) Amortization Tracking
+        const verticalVelocity = kineticTelemetry.instantVelocity || 0;
+        sscResult = sscEngine.trackTurnaround(verticalVelocity, nowMs);
+        if (sscResult && sscResult.justCompleted) {
+          writeLog(`⚡ [SSC] Turnaround amortization: ${sscResult.amortizationMs}ms [${sscResult.elasticityRating}]`);
+          if (sscResult.elasticityRating === 'HIGH_ELASTICITY') {
+            reflexAudio.playElasticSnap();
+          }
+        }
+
+        // Zero-Latency Acoustic Wobble Warning for Excessive Horizontal Bar Deviation
+        if (barbellRadarResult && (!barbellRadarResult.isLevel && Math.abs(barbellRadarResult.tiltDeg) > 4.5 || (barbellRadarResult.driftRatio && barbellRadarResult.driftRatio > 0.18))) {
+          reflexAudio.playWobbleWarning();
+        }
+
+        // Accumulate active repetition trajectory coordinates for Bar Efficiency (MER) calculation
+        if (fsm.currentState === 'IN_PROGRESS') {
+          const pathPt = (barbellRadarResult && barbellRadarResult.barMidpoint)
+            ? { x: barbellRadarResult.barMidpoint.x, y: barbellRadarResult.barMidpoint.y, z: 0 }
+            : (wristMidpoint ? { x: wristMidpoint.x, y: wristMidpoint.y, z: 0 } : (selectedVertex ? { x: selectedVertex.x, y: selectedVertex.y, z: selectedVertex.z || 0 } : null));
+          if (pathPt) {
+            currentRepTrajectory.push(pathPt);
+          }
+        }
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1340,6 +1378,14 @@ document.addEventListener('DOMContentLoaded', () => {
           if (barPath && barPath.length > 0) {
             fullSessionPath.push(...barPath.map(p => ({ x: p.x, y: p.y })));
           }
+
+          // Evaluate completed repetition bar trajectory mechanical efficiency (MER)
+          const repTrajectoryPoints = currentRepTrajectory.length >= 2
+            ? currentRepTrajectory
+            : (barPath && barPath.length >= 2 ? barPath : []);
+          barEfficiencyResult = barEfficiencyEngine.evaluateRepTrajectory(repTrajectoryPoints);
+          currentRepTrajectory = [];
+          writeLog(`🎯 [MER] Rep ${fsm.repCount} Efficiency: ${barEfficiencyResult.merPercent}% [${barEfficiencyResult.rating}] (Drift: ${barEfficiencyResult.horizontalDriftMm}mm)`);
 
           // Reset trackers for next rep
           lastRepCount = fsm.repCount;
@@ -1472,7 +1518,9 @@ document.addEventListener('DOMContentLoaded', () => {
       voiceStatus: voiceCommander.getStatusText(),
       dvrReplay: faultDvr.getCurrentReplayFrame(performance.now()),
       transverseData: hasPose ? transverseResult : null,
-      imuStatus: imuStabilizer.getStatusText()
+      imuStatus: imuStabilizer.getStatusText(),
+      sscData: sscResult || sscEngine.getLastResult(),
+      efficiencyData: barEfficiencyResult || barEfficiencyEngine.getLastResult()
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1554,6 +1602,9 @@ document.addEventListener('DOMContentLoaded', () => {
     faultDvr.clear();
     transverseAnalyzer.reset();
     imuStabilizer.recalibrateBaseline();
+    sscEngine.reset();
+    barEfficiencyEngine.reset();
+    currentRepTrajectory = [];
     voiceCommander.start();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
@@ -1632,6 +1683,9 @@ document.addEventListener('DOMContentLoaded', () => {
     faultDvr.clear();
     transverseAnalyzer.reset();
     imuStabilizer.stopListening();
+    sscEngine.reset();
+    barEfficiencyEngine.reset();
+    currentRepTrajectory = [];
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -1674,6 +1728,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   startBtn.addEventListener('click', async () => {
     soundEngine.unlockContext();
+    reflexAudio.unlock();
     voiceCoach.speakPhrase(PhraseKey.WORKOUT_STARTED);
     imuStabilizer.init().catch(() => {});
     
