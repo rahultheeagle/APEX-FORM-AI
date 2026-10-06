@@ -58,6 +58,8 @@ import { TransverseAnalyzer } from './core/transverseAnalyzer.js';
 import { SscEngine } from './core/sscEngine.js';
 import { BarEfficiencyEngine } from './core/barEfficiencyEngine.js';
 import { ReflexAudio } from './audio/reflexAudio.js';
+import { RomRadarEngine } from './core/romRadarEngine.js';
+import { RpePredictor } from './core/rpePredictor.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -165,6 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const sscEngine = new SscEngine();
   const barEfficiencyEngine = new BarEfficiencyEngine();
   const reflexAudio = new ReflexAudio();
+  const romRadarEngine = new RomRadarEngine();
+  const rpePredictor = new RpePredictor();
   let currentRepTrajectory = [];
   let lastFaultReplayTriggerTime = 0;
   let lastCriticalStallTime = 0;
@@ -633,6 +637,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sscEngine.reset();
     barEfficiencyEngine.reset();
     currentRepTrajectory = [];
+    romRadarEngine.reset();
+    rpePredictor.reset();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
@@ -734,6 +740,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let transverseResult = null;
     let sscResult = null;
     let barEfficiencyResult = null;
+    let romRadarResult = null;
+    let rpeResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -1259,6 +1267,9 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
+        // 3D Joint Polar Range of Motion (ROM) Radar & Bilateral Mobility Tracking
+        romRadarResult = romRadarEngine.updateFromLandmarks(activeLandmarks, activeExercise, nowMs);
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1386,6 +1397,11 @@ document.addEventListener('DOMContentLoaded', () => {
           barEfficiencyResult = barEfficiencyEngine.evaluateRepTrajectory(repTrajectoryPoints);
           currentRepTrajectory = [];
           writeLog(`🎯 [MER] Rep ${fsm.repCount} Efficiency: ${barEfficiencyResult.merPercent}% [${barEfficiencyResult.rating}] (Drift: ${barEfficiencyResult.horizontalDriftMm}mm)`);
+
+          // Velocity-Loss Objective RPE & Metabolic Fatigue Prediction
+          const repMCV = kineticTelemetry.currentMCV || (fsm.phaseTimings.concentricVelocity > 0 ? fsm.phaseTimings.concentricVelocity / 100 : 0.65);
+          rpeResult = rpePredictor.recordRep(repMCV);
+          writeLog(`📊 [RPE] Rep ${fsm.repCount}: Objective RPE ${rpeResult.calculatedRPE.toFixed(1)} [Strain: ${rpeResult.strainLabel}] (Loss: -${rpeResult.velocityLossPct}%, ${rpeResult.metabolicState})`);
 
           // Reset trackers for next rep
           lastRepCount = fsm.repCount;
@@ -1520,7 +1536,9 @@ document.addEventListener('DOMContentLoaded', () => {
       transverseData: hasPose ? transverseResult : null,
       imuStatus: imuStabilizer.getStatusText(),
       sscData: sscResult || sscEngine.getLastResult(),
-      efficiencyData: barEfficiencyResult || barEfficiencyEngine.getLastResult()
+      efficiencyData: barEfficiencyResult || barEfficiencyEngine.getLastResult(),
+      romRadarData: hasPose ? romRadarResult : null,
+      rpeData: rpeResult || rpePredictor.getLastResult()
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1605,6 +1623,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sscEngine.reset();
     barEfficiencyEngine.reset();
     currentRepTrajectory = [];
+    romRadarEngine.reset();
+    rpePredictor.reset();
     voiceCommander.start();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
@@ -1686,6 +1706,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sscEngine.reset();
     barEfficiencyEngine.reset();
     currentRepTrajectory = [];
+    romRadarEngine.reset();
+    rpePredictor.reset();
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;

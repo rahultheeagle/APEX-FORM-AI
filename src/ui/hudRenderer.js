@@ -223,12 +223,14 @@ export class HUDRenderer {
     transverseData = null,
     imuStatus = null,
     sscData = null,
-    efficiencyData = null
+    efficiencyData = null,
+    romRadarData = null,
+    rpeData = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData) {
+      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
@@ -236,6 +238,9 @@ export class HUDRenderer {
         }
         if (efficiencyData) {
           this.drawBarEfficiencyBadge(this.ctx, efficiencyData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (rpeData) {
+          this.drawRpeBadge(this.ctx, rpeData, this.logicalWidth, this.logicalHeight, performance.now());
         }
         if (dvrReplay) {
           this.drawDvrWindow(this.ctx, dvrReplay, this.logicalWidth, this.logicalHeight, performance.now());
@@ -245,6 +250,9 @@ export class HUDRenderer {
         }
         if (sscData) {
           this.drawSscAmortizationMeter(this.ctx, sscData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (romRadarData) {
+          this.drawPolarMobilityRadar(this.ctx, romRadarData, this.logicalWidth, this.logicalHeight, performance.now());
         }
         this.ctx.restore();
       }
@@ -483,6 +491,16 @@ export class HUDRenderer {
     // 40. Bar Path Mechanical Efficiency Ratio (MER) Badge (Upper-Left Pill Card)
     if (efficiencyData) {
       this.drawBarEfficiencyBadge(this.ctx, efficiencyData, width, height, now);
+    }
+
+    // 41. 3D Joint Polar Mobility Radar (Lower-Right Overhead Radar Sweep)
+    if (romRadarData) {
+      this.drawPolarMobilityRadar(this.ctx, romRadarData, width, height, now);
+    }
+
+    // 42. Velocity-Loss Objective RPE HUD Badge (Top-Right Cyber Badge with Mini-Graph)
+    if (rpeData) {
+      this.drawRpeBadge(this.ctx, rpeData, width, height, now);
     }
 
     this.ctx.restore();
@@ -4907,6 +4925,330 @@ export class HUDRenderer {
       themeColor,
       'left'
     );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the 3D Joint Polar Mobility Radar in the lower-right corner:
+   * - Overhead circular radar sweep (360° rotating beam)
+   * - Left limb perimeter (Cyan) vs Right limb perimeter (Emerald)
+   * - Restricted sectors flagged in red with deficiency warnings
+   * - Bilateral symmetry score readout
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [romRadarData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawPolarMobilityRadar(ctx = this.ctx, romRadarData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !romRadarData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const h = canvasHeight || this.logicalHeight || 480;
+
+    const cardW = 168;
+    const cardH = 144;
+    // Mirrored display: x = 20 places it on visual LOWER-RIGHT of screen
+    const x = 20;
+    const y = h - cardH - 24;
+
+    const symmetryScore = typeof romRadarData.symmetryScore === 'number' ? romRadarData.symmetryScore : 100;
+    const restrictedSectors = Array.isArray(romRadarData.restrictedSectors) ? romRadarData.restrictedSectors : [];
+    const hasRestrictions = restrictedSectors.length > 0;
+    const sweepAngleDeg = typeof romRadarData.sweepAngleDeg === 'number' ? romRadarData.sweepAngleDeg : 0;
+
+    ctx.save();
+
+    const themeColor = hasRestrictions ? '#ff0055' : '#00f2fe';
+    const borderPulse = hasRestrictions ? (0.65 + 0.35 * Math.sin(now / 100)) : 0.40;
+
+    // 1. Glassmorphic Card Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = hasRestrictions ? `rgba(255, 0, 85, ${borderPulse.toFixed(2)})` : 'rgba(0, 242, 254, 0.40)';
+    ctx.lineWidth = hasRestrictions ? 1.8 : 1.2;
+    ctx.shadowBlur = hasRestrictions ? 12 : 6;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Header
+    const textCenterX = x + (cardW / 2);
+    this._drawUnmirroredText(
+      hasRestrictions ? '⚠️ MOBILITY DEFICIT RADAR' : 'POLAR MOBILITY RADAR [3D ROM]',
+      textCenterX,
+      y + 11,
+      'bold 7.2px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'center'
+    );
+
+    // 3. Circular Radar Sweep Disc
+    const radarCX = x + (cardW / 2);
+    const radarCY = y + 68;
+    const radarR = 38;
+
+    // Disc background
+    ctx.beginPath();
+    ctx.arc(radarCX, radarCY, radarR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(3, 8, 18, 0.88)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1.0;
+    ctx.fill();
+    ctx.stroke();
+
+    // Concentric range rings (33%, 66%, 100%)
+    [0.33, 0.66, 1.0].forEach(ratio => {
+      ctx.beginPath();
+      ctx.arc(radarCX, radarCY, radarR * ratio, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    });
+
+    // Crosshairs
+    ctx.beginPath();
+    ctx.moveTo(radarCX - radarR, radarCY);
+    ctx.lineTo(radarCX + radarR, radarCY);
+    ctx.moveTo(radarCX, radarCY - radarR);
+    ctx.lineTo(radarCX, radarCY + radarR);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // 4. Highlight Restricted Sectors (in Red)
+    restrictedSectors.forEach(sec => {
+      const startRad = (sec.azimuthMin * Math.PI) / 180;
+      const endRad = (sec.azimuthMax * Math.PI) / 180;
+      ctx.beginPath();
+      ctx.moveTo(radarCX, radarCY);
+      ctx.arc(radarCX, radarCY, radarR, startRad, endRad);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255, 0, 85, 0.28)';
+      ctx.strokeStyle = 'rgba(255, 0, 85, 0.70)';
+      ctx.lineWidth = 1.2;
+      ctx.fill();
+      ctx.stroke();
+    });
+
+    // 5. Rotating Radar Sweep Beam
+    const sweepRad = (sweepAngleDeg * Math.PI) / 180;
+    ctx.beginPath();
+    ctx.moveTo(radarCX, radarCY);
+    ctx.lineTo(radarCX + radarR * Math.cos(sweepRad), radarCY + radarR * Math.sin(sweepRad));
+    ctx.strokeStyle = 'rgba(0, 242, 254, 0.85)';
+    ctx.lineWidth = 1.4;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = '#00f2fe';
+    ctx.stroke();
+
+    // Sweep trail fan
+    ctx.beginPath();
+    ctx.moveTo(radarCX, radarCY);
+    ctx.arc(radarCX, radarCY, radarR, sweepRad - 0.35, sweepRad);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 242, 254, 0.12)';
+    ctx.fill();
+
+    // 6. Draw Left Perimeter (Cyan)
+    const perimL = romRadarData.perimeterLeft || [];
+    if (perimL.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < perimL.length; i++) {
+        const pt = perimL[i];
+        const rad = (pt.azimuthDeg * Math.PI) / 180;
+        const dist = Math.min(radarR, pt.radiusNorm * radarR);
+        const px = radarCX + dist * Math.cos(rad);
+        const py = radarCY + dist * Math.sin(rad);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = 'rgba(0, 242, 254, 0.75)';
+      ctx.lineWidth = 1.4;
+      ctx.shadowBlur = 4;
+      ctx.shadowColor = '#00f2fe';
+      ctx.stroke();
+    }
+
+    // 7. Draw Right Perimeter (Emerald)
+    const perimR = romRadarData.perimeterRight || [];
+    if (perimR.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < perimR.length; i++) {
+        const pt = perimR[i];
+        const rad = (pt.azimuthDeg * Math.PI) / 180;
+        const dist = Math.min(radarR, pt.radiusNorm * radarR);
+        const px = radarCX + dist * Math.cos(rad);
+        const py = radarCY + dist * Math.sin(rad);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = 'rgba(0, 255, 135, 0.75)';
+      ctx.lineWidth = 1.4;
+      ctx.shadowBlur = 4;
+      ctx.shadowColor = '#00ff87';
+      ctx.stroke();
+    }
+
+    // 8. Active Joint Position Nodes
+    if (romRadarData.left) {
+      const radL = (romRadarData.left.azimuthDeg * Math.PI) / 180;
+      const distL = Math.min(radarR, (romRadarData.left.radius / 0.45) * radarR);
+      const lx = radarCX + distL * Math.cos(radL);
+      const ly = radarCY + distL * Math.sin(radL);
+      ctx.beginPath();
+      ctx.arc(lx, ly, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#00f2fe';
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#00f2fe';
+      ctx.fill();
+    }
+
+    if (romRadarData.right) {
+      const radR = (romRadarData.right.azimuthDeg * Math.PI) / 180;
+      const distR = Math.min(radarR, (romRadarData.right.radius / 0.45) * radarR);
+      const rx = radarCX + distR * Math.cos(radR);
+      const ry = radarCY + distR * Math.sin(radR);
+      ctx.beginPath();
+      ctx.arc(rx, ry, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#00ff87';
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#00ff87';
+      ctx.fill();
+    }
+
+    // 9. Legend & Footer Metrics
+    this._drawUnmirroredText('● LEFT (CYAN)', x + 16, y + cardH - 24, '6px "Orbitron", sans-serif', '#00f2fe', 'left');
+    this._drawUnmirroredText('● RIGHT (EMERALD)', x + cardW - 16, y + cardH - 24, '6px "Orbitron", sans-serif', '#00ff87', 'right');
+
+    const footerText = hasRestrictions ? `⚠️ ${restrictedSectors[0].label}` : `SYMMETRY: ${symmetryScore}% [OPTIMAL]`;
+    const footerColor = hasRestrictions ? '#ff0055' : '#00ff87';
+    this._drawUnmirroredText(
+      footerText,
+      textCenterX,
+      y + cardH - 10,
+      'bold 6.8px "Orbitron", -apple-system, sans-serif',
+      footerColor,
+      'center'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Dynamic Objective RPE HUD Badge with mini velocity loss bar graph:
+   * 'OBJECTIVE RPE: 8.5 [METABOLIC STRAIN: HIGH]'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [rpeData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawRpeBadge(ctx = this.ctx, rpeData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !rpeData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const badgeW = 216;
+    const badgeH = 46;
+    // Mirrored display: x = 20 places it on visual TOP-RIGHT of screen
+    const x = 20;
+    const y = 14;
+
+    const rpe = typeof rpeData.calculatedRPE === 'number' ? rpeData.calculatedRPE : 6.0;
+    const strainLabel = rpeData.strainLabel || 'LOW';
+    const lossHistory = Array.isArray(rpeData.lossHistory) ? rpeData.lossHistory : [];
+    const label = rpeData.displayLabel || `OBJECTIVE RPE: ${rpe.toFixed(1)} [METABOLIC STRAIN: ${strainLabel}]`;
+
+    ctx.save();
+
+    let themeColor = '#00ff87';
+    if (rpe >= 9.5) {
+      themeColor = '#ff0055';
+    } else if (rpe >= 7.5) {
+      themeColor = '#f59e0b';
+    }
+
+    const pulse = rpe >= 9.5 ? (0.65 + 0.35 * Math.sin(now / 100)) : 0.40;
+
+    // 1. Badge Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = rpe >= 9.5 ? `rgba(255, 0, 85, ${pulse.toFixed(2)})` : `rgba(${rpe >= 7.5 ? '245, 158, 11' : '0, 255, 135'}, 0.45)`;
+    ctx.lineWidth = rpe >= 9.5 ? 1.8 : 1.2;
+    ctx.shadowBlur = rpe >= 9.5 ? 10 : 5;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Unmirrored Readout Text Header
+    this._drawUnmirroredText(
+      label,
+      x + 12,
+      y + 12,
+      'bold 7.2px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    // 3. Velocity-Loss Mini-Bar Graph (Dynamic per-rep fatigue progression)
+    const graphX = x + 12;
+    const graphY = y + 24;
+    const graphW = badgeW - 24;
+    const graphH = 14;
+
+    // Track baseline
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    this._drawRoundedRect(ctx, graphX, graphY, graphW, graphH, 2);
+    ctx.fill();
+
+    const maxBars = 10;
+    const barSlotW = (graphW - 4) / maxBars;
+    const barW = Math.max(2, barSlotW - 2);
+
+    if (lossHistory.length === 0) {
+      this._drawUnmirroredText(
+        'BASELINE VELOCITY ESTABLISHING...',
+        graphX + (graphW / 2),
+        graphY + (graphH / 2),
+        '5.8px "Orbitron", monospace',
+        '#64748b',
+        'center'
+      );
+    } else {
+      const recentLosses = lossHistory.slice(-maxBars);
+      for (let i = 0; i < recentLosses.length; i++) {
+        const loss = Math.max(0, Math.min(100, recentLosses[i]));
+        const barH = Math.max(2, Math.min(graphH - 2, (loss / 50) * (graphH - 2)));
+        const bx = graphX + 2 + (i * barSlotW);
+        const by = graphY + graphH - barH - 1;
+
+        let barColor = '#00ff87';
+        if (loss >= 30) {
+          barColor = '#ff0055';
+        } else if (loss >= 15) {
+          barColor = '#f59e0b';
+        }
+
+        ctx.fillStyle = barColor;
+        this._drawRoundedRect(ctx, bx, by, barW, barH, 1);
+        ctx.fill();
+      }
+
+      const latestLoss = lossHistory[lossHistory.length - 1];
+      this._drawUnmirroredText(
+        `LOSS: -${latestLoss.toFixed(1)}%`,
+        graphX + graphW - 2,
+        y + 12,
+        '6.2px "Orbitron", monospace',
+        '#cbd5e1',
+        'right'
+      );
+    }
 
     ctx.restore();
   }
