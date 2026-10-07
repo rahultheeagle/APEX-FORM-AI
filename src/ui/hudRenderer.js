@@ -225,12 +225,14 @@ export class HUDRenderer {
     sscData = null,
     efficiencyData = null,
     romRadarData = null,
-    rpeData = null
+    rpeData = null,
+    ghostSkeleton = null,
+    cheatData = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData) {
+      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
@@ -238,6 +240,9 @@ export class HUDRenderer {
         }
         if (efficiencyData) {
           this.drawBarEfficiencyBadge(this.ctx, efficiencyData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (cheatData) {
+          this.drawCheatGauge(this.ctx, cheatData, this.logicalWidth, this.logicalHeight, performance.now());
         }
         if (rpeData) {
           this.drawRpeBadge(this.ctx, rpeData, this.logicalWidth, this.logicalHeight, performance.now());
@@ -303,6 +308,11 @@ export class HUDRenderer {
 
     // 3. 3D Depth-Modulated Multi-Layered Bones
     this._renderHolographicBones(landmarks, activeExercise, theme, hasFault, width, height);
+
+    // 3b. Multi-Rep Ghost Skeleton Onion-Skin (translucent baseline Rep 1 comparison)
+    if (ghostSkeleton) {
+      this._renderGhostOnionSkin(ghostSkeleton, landmarks, width, height);
+    }
 
     // 4. Articulated Concentric Joint Nodes
     this._renderArticulatedNodes(landmarks, activeExercise, theme, now, width, height);
@@ -501,6 +511,11 @@ export class HUDRenderer {
     // 42. Velocity-Loss Objective RPE HUD Badge (Top-Right Cyber Badge with Mini-Graph)
     if (rpeData) {
       this.drawRpeBadge(this.ctx, rpeData, width, height, now);
+    }
+
+    // 43. Momentum Pelvic Sway & Strictness HUD Gauge (Top-Left Pill)
+    if (cheatData) {
+      this.drawCheatGauge(this.ctx, cheatData, width, height, now);
     }
 
     this.ctx.restore();
@@ -4549,7 +4564,7 @@ export class HUDRenderer {
     const cardH = 92;
     // Mirrored display: (w - cardW - 20) places it on visual TOP-LEFT of screen
     const x = w - cardW - 20;
-    const y = 84; // Stacked cleanly below top status badges
+    const y = 104; // Stacked cleanly below top status badges
 
     const pelvicYaw = typeof transverseData.pelvicYawDeg === 'number' ? transverseData.pelvicYawDeg : 0;
     const isAsymmetric = Boolean(transverseData.isAsymmetric);
@@ -5249,6 +5264,167 @@ export class HUDRenderer {
         'right'
       );
     }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the multi-rep ghost skeleton onion-skin comparing current reps
+   * against the baseline form of Rep 1.
+   * - Translucent cyan dashed bone segments (rgba(0, 242, 254, 0.25))
+   * - Corrective offset lines linking live joints to baseline ghost nodes when drift occurs
+   * 
+   * @param {Array<any>} ghostSkeleton Interpolated 33-landmark baseline ghost array.
+   * @param {Array<any>} landmarks Live athlete landmarks.
+   * @param {number} width
+   * @param {number} height
+   * @private
+   */
+  _renderGhostOnionSkin(ghostSkeleton, landmarks, width, height) {
+    if (!ghostSkeleton || ghostSkeleton.length < 25) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const ghostColor = 'rgba(0, 242, 254, 0.25)';
+    const ghostJointColor = 'rgba(0, 242, 254, 0.40)';
+
+    // 1. Draw Dashed Ghost Skeletal Connections
+    ctx.strokeStyle = ghostColor;
+    ctx.lineWidth = 1.8;
+    ctx.setLineDash([4, 4]);
+
+    for (let i = 0; i < SKELETON_CONNECTIONS.length; i++) {
+      const [idxA, idxB] = SKELETON_CONNECTIONS[i];
+      const pA = ghostSkeleton[idxA];
+      const pB = ghostSkeleton[idxB];
+
+      if (pA && pB && (pA.visibility || 1) > 0.35 && (pB.visibility || 1) > 0.35) {
+        ctx.beginPath();
+        ctx.moveTo(pA.x * width, pA.y * height);
+        ctx.lineTo(pB.x * width, pB.y * height);
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+
+    // 2. Draw Translucent Ghost Joint Nodes
+    for (let i = 0; i < MAJOR_JOINTS.length; i++) {
+      const idx = MAJOR_JOINTS[i];
+      const lm = ghostSkeleton[idx];
+      if (lm && (lm.visibility || 1) > 0.35) {
+        ctx.beginPath();
+        ctx.arc(lm.x * width, lm.y * height, 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = ghostJointColor;
+        ctx.fill();
+      }
+    }
+
+    // 3. Draw Corrective Offset Lines Linking Live Joints to Ghost Nodes on Drift
+    if (landmarks && landmarks.length >= 25) {
+      ctx.setLineDash([2, 3]);
+      for (let i = 0; i < MAJOR_JOINTS.length; i++) {
+        const idx = MAJOR_JOINTS[i];
+        const live = landmarks[idx];
+        const ghost = ghostSkeleton[idx];
+
+        if (live && ghost && (live.visibility || 1) > 0.4 && (ghost.visibility || 1) > 0.4) {
+          const dx = (live.x - ghost.x) * width;
+          const dy = (live.y - ghost.y) * height;
+          const dist = Math.hypot(dx, dy);
+
+          // Drift threshold: visual deviation from Rep 1 baseline groove (> 18 px)
+          if (dist > 18) {
+            ctx.beginPath();
+            ctx.moveTo(live.x * width, live.y * height);
+            ctx.lineTo(ghost.x * width, ghost.y * height);
+            ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)'; // Glowing amber corrective offset vector
+            ctx.lineWidth = 1.3;
+            ctx.stroke();
+
+            // Corrective beacon node at baseline position
+            ctx.beginPath();
+            ctx.arc(ghost.x * width, ghost.y * height, 2.2, 0, Math.PI * 2);
+            ctx.fillStyle = '#f59e0b';
+            ctx.fill();
+          }
+        }
+      }
+      ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Strictness / Momentum Cheat HUD Gauge:
+   * 'STRICTNESS: 96% [CLEAN FORM]' or '⚠️ MOMENTUM DETECTED // ELIMINATE SWAY'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [cheatData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawCheatGauge(ctx = this.ctx, cheatData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !cheatData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const badgeW = 196;
+    const badgeH = 24;
+    // Mirrored display: (w - badgeW - 20) places it on visual TOP-LEFT of screen
+    // Placed at y = 74 (stacked below Bar Efficiency Badge at y=46)
+    const x = w - badgeW - 20;
+    const y = 74;
+
+    const isCheated = Boolean(cheatData.isCheated);
+    const score = typeof cheatData.strictnessScore === 'number' ? cheatData.strictnessScore : 100;
+    const label = cheatData.displayLabel || (isCheated ? '⚠️ MOMENTUM DETECTED // ELIMINATE SWAY' : `STRICTNESS: ${score}% [CLEAN FORM]`);
+
+    ctx.save();
+
+    const themeColor = isCheated ? '#f59e0b' : '#00ff87';
+    const pulse = isCheated ? (0.65 + 0.35 * Math.sin(now / 90)) : 0.40;
+
+    // 1. Glassmorphic Pill Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = isCheated ? `rgba(245, 158, 11, ${pulse.toFixed(2)})` : 'rgba(0, 255, 135, 0.45)';
+    ctx.lineWidth = isCheated ? 1.8 : 1.2;
+    ctx.shadowBlur = isCheated ? 12 : 5;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Icon Indicator Node
+    const iconX = x + 12;
+    const iconY = y + (badgeH / 2);
+
+    ctx.beginPath();
+    ctx.arc(iconX, iconY, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.shadowBlur = isCheated ? 8 : 4;
+    ctx.shadowColor = themeColor;
+    ctx.fill();
+
+    if (isCheated) {
+      ctx.beginPath();
+      ctx.arc(iconX, iconY, 3.2 + 3.5 * (1 - pulse), 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(245, 158, 11, ${(0.8 * pulse).toFixed(2)})`;
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    }
+
+    // 3. Unmirrored Readout Text
+    this._drawUnmirroredText(
+      label,
+      x + 22,
+      y + (badgeH / 2),
+      'bold 6.8px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
 
     ctx.restore();
   }

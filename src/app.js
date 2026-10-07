@@ -60,6 +60,8 @@ import { BarEfficiencyEngine } from './core/barEfficiencyEngine.js';
 import { ReflexAudio } from './audio/reflexAudio.js';
 import { RomRadarEngine } from './core/romRadarEngine.js';
 import { RpePredictor } from './core/rpePredictor.js';
+import { CheatDetector } from './core/cheatDetector.js';
+import { GhostOnionSkin } from './ui/ghostOnionSkin.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -169,6 +171,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const reflexAudio = new ReflexAudio();
   const romRadarEngine = new RomRadarEngine();
   const rpePredictor = new RpePredictor();
+  const cheatDetector = new CheatDetector();
+  const ghostOnionSkin = new GhostOnionSkin();
+  let cleanRepCount = 0;
   let currentRepTrajectory = [];
   let lastFaultReplayTriggerTime = 0;
   let lastCriticalStallTime = 0;
@@ -639,6 +644,9 @@ document.addEventListener('DOMContentLoaded', () => {
     currentRepTrajectory = [];
     romRadarEngine.reset();
     rpePredictor.reset();
+    cheatDetector.reset();
+    ghostOnionSkin.reset();
+    cleanRepCount = 0;
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
     lastMobilityAlertTime = 0;
@@ -742,6 +750,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let barEfficiencyResult = null;
     let romRadarResult = null;
     let rpeResult = null;
+    let cheatResult = null;
+    let ghostFrame = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -1270,6 +1280,37 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3D Joint Polar Range of Motion (ROM) Radar & Bilateral Mobility Tracking
         romRadarResult = romRadarEngine.updateFromLandmarks(activeLandmarks, activeExercise, nowMs);
 
+        // Dynamic Momentum Cheat Detector & 3D Pelvic Sway Tracking
+        if (fsm.currentState === 'IN_PROGRESS' && !cheatDetector.isAnchored) {
+          cheatDetector.anchorBaselinePrism(activeLandmarks);
+        }
+        cheatResult = cheatDetector.evaluateFromLandmarks(activeLandmarks, verticalVelocity);
+
+        // Repetition Phase Progress [0.0, 1.0] for Ghost Onion-Skin Skeleton
+        let phaseProgress = 0;
+        const standingExtAngle = 160;
+        const minDepthTarget = activeExercise === 'BICEP_CURL' ? 50 : 90;
+        const peakInflectionAngle = (currentRepMinAngle < 180 && currentRepMinAngle > 0) ? currentRepMinAngle : minDepthTarget;
+
+        if (stateMachine.midpointAchieved) {
+          const concentricSpan = Math.max(15, standingExtAngle - peakInflectionAngle);
+          phaseProgress = 0.5 + 0.5 * Math.min(1.0, Math.max(0.0, (currentAngle - peakInflectionAngle) / concentricSpan));
+        } else {
+          const eccentricSpan = Math.max(15, standingExtAngle - minDepthTarget);
+          phaseProgress = 0.5 * Math.min(1.0, Math.max(0.0, (standingExtAngle - currentAngle) / eccentricSpan));
+        }
+        phaseProgress = Math.max(0.0, Math.min(1.0, phaseProgress));
+
+        // Sample Rep 1 into Ghost Onion-Skin baseline buffer
+        if (fsm.repCount <= 1 && fsm.currentState === 'IN_PROGRESS') {
+          ghostOnionSkin.recordBaselineSample(1, activeLandmarks, phaseProgress);
+        }
+
+        // Interpolate Ghost Frame for current phase progress (Reps >= 2)
+        if (ghostOnionSkin.hasBaseline()) {
+          ghostFrame = ghostOnionSkin.getGhostFrame(phaseProgress);
+        }
+
         // AR Spatial Laser Constraints & Movement Corridor Enforcement
         if (!laserConstraints.isAutoCalibrated) {
           laserConstraints.autoCalibrate(activeExercise, activeLandmarks);
@@ -1402,6 +1443,21 @@ document.addEventListener('DOMContentLoaded', () => {
           const repMCV = kineticTelemetry.currentMCV || (fsm.phaseTimings.concentricVelocity > 0 ? fsm.phaseTimings.concentricVelocity / 100 : 0.65);
           rpeResult = rpePredictor.recordRep(repMCV);
           writeLog(`📊 [RPE] Rep ${fsm.repCount}: Objective RPE ${rpeResult.calculatedRPE.toFixed(1)} [Strain: ${rpeResult.strainLabel}] (Loss: -${rpeResult.velocityLossPct}%, ${rpeResult.metabolicState})`);
+
+          // Finalize Rep 1 baseline for Ghost Onion Skin
+          if (fsm.repCount === 1) {
+            ghostOnionSkin.finalizeBaseline();
+          }
+
+          // Dynamic Momentum Cheat Evaluation & Strictness Auditing
+          const repCheatSummary = cheatDetector.onRepComplete();
+          if (repCheatSummary.wasCheated) {
+            writeLog(`⚠️ [MOMENTUM CHEAT] Rep ${fsm.repCount} flagged as CHEATED/KIPPED (Peak Sway: ${(repCheatSummary.peakSway * 100).toFixed(1)}cm) — Clean Reps: ${cleanRepCount}`, true);
+          } else {
+            cleanRepCount++;
+            writeLog(`✅ [CLEAN REP] Rep ${fsm.repCount} validated with strict kinematics! (Clean Reps: ${cleanRepCount})`);
+          }
+          cheatDetector.anchorBaselinePrism(activeLandmarks);
 
           // Reset trackers for next rep
           lastRepCount = fsm.repCount;
@@ -1538,7 +1594,9 @@ document.addEventListener('DOMContentLoaded', () => {
       sscData: sscResult || sscEngine.getLastResult(),
       efficiencyData: barEfficiencyResult || barEfficiencyEngine.getLastResult(),
       romRadarData: hasPose ? romRadarResult : null,
-      rpeData: rpeResult || rpePredictor.getLastResult()
+      rpeData: rpeResult || rpePredictor.getLastResult(),
+      ghostSkeleton: ghostFrame,
+      cheatData: cheatResult || cheatDetector.lastResult
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1625,6 +1683,9 @@ document.addEventListener('DOMContentLoaded', () => {
     currentRepTrajectory = [];
     romRadarEngine.reset();
     rpePredictor.reset();
+    cheatDetector.reset();
+    ghostOnionSkin.reset();
+    cleanRepCount = 0;
     voiceCommander.start();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
@@ -1708,6 +1769,8 @@ document.addEventListener('DOMContentLoaded', () => {
     currentRepTrajectory = [];
     romRadarEngine.reset();
     rpePredictor.reset();
+    cheatDetector.reset();
+    ghostOnionSkin.reset();
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -1859,6 +1922,8 @@ document.addEventListener('DOMContentLoaded', () => {
         kineticEfficiency: kineticChainSummary.avgEfficiencyPercent,
         kineticStatus: kineticChainSummary.status,
         peakDorsiAngle: Math.round(peakDorsiAngle),
+        cleanReps: cleanRepCount,
+        cheatedReps: Math.max(0, totalRepsCount - cleanRepCount),
         repDetails: completedReps.map((r, i) => ({
           repNum: r.repNum,
           peakAngle: Math.round(r.peakAngle),
@@ -1911,7 +1976,9 @@ document.addEventListener('DOMContentLoaded', () => {
       compromisedRepsCount: spineAnalyzer.compromisedRepsCount,
       peakLumbarFlexion: spineAnalyzer.peakLumbarFlexion,
       kineticChainRating: kineticChainSummary,
-      peakDorsiAngle: Math.round(peakDorsiAngle)
+      peakDorsiAngle: Math.round(peakDorsiAngle),
+      cleanReps: cleanRepCount,
+      cheatedReps: Math.max(0, totalRepsCount - cleanRepCount)
     });
   });
 });
