@@ -64,6 +64,8 @@ import { CheatDetector } from './core/cheatDetector.js';
 import { GhostOnionSkin } from './ui/ghostOnionSkin.js';
 import { ContrastPass } from './shaders/contrastPass.js';
 import { CnsMonitor } from './core/cnsMonitor.js';
+import { CrepitusAnalyzer } from './audio/crepitusAnalyzer.js';
+import { InertiaEngine } from './core/inertiaEngine.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -177,6 +179,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const ghostOnionSkin = new GhostOnionSkin();
   const contrastPass = new ContrastPass();
   const cnsMonitor = new CnsMonitor();
+  const crepitusAnalyzer = new CrepitusAnalyzer();
+  const inertiaEngine = new InertiaEngine();
   let cleanRepCount = 0;
   let currentRepTrajectory = [];
   let lastFaultReplayTriggerTime = 0;
@@ -651,6 +655,8 @@ document.addEventListener('DOMContentLoaded', () => {
     cheatDetector.reset();
     ghostOnionSkin.reset();
     cnsMonitor.reset();
+    crepitusAnalyzer.reset();
+    inertiaEngine.reset();
     cleanRepCount = 0;
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -758,6 +764,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let cheatResult = null;
     let ghostFrame = null;
     let cnsResult = null;
+    let crepitusResult = null;
+    let inertiaResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -829,6 +837,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Central Nervous System (CNS) Neuromuscular Tremor FFT Analysis
       cnsResult = cnsMonitor.update(wristMidpoint, nowMs);
+
+      // High-Frequency Joint Crepitus Acoustic Profiler (1800 Hz - 5500 Hz)
+      crepitusResult = crepitusAnalyzer.analyzeJointAcoustics(fsm.currentState);
+
+      // Segmental Moment of Inertia & Rotational Angular Momentum (L = I * omega)
+      inertiaResult = inertiaEngine.computeRotationalInertia(landmarks, 75, nowMs);
 
       // Real-Time Barbell Collinear Alignment & Sub-Pixel Tilt Radar
       if (wristL && wristR) {
@@ -1607,7 +1621,9 @@ document.addEventListener('DOMContentLoaded', () => {
       ghostSkeleton: ghostFrame,
       cheatData: cheatResult || cheatDetector.lastResult,
       cnsData: cnsResult || cnsMonitor.getNeurologicalStatus(),
-      shaderStatus: contrastPass.getStatus()
+      shaderStatus: contrastPass.getStatus(),
+      crepitusData: crepitusResult,
+      inertiaData: inertiaResult || inertiaEngine.getLastResult()
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1699,16 +1715,26 @@ document.addEventListener('DOMContentLoaded', () => {
     cheatDetector.reset();
     ghostOnionSkin.reset();
     cnsMonitor.reset();
+    crepitusAnalyzer.reset();
+    inertiaEngine.reset();
     cleanRepCount = 0;
     voiceCommander.start();
     lastMobilityAlertTime = 0;
     valsalvaMonitor.init().then((micActive) => {
       if (micActive) {
         writeLog('🎙️ [VALSALVA] Acoustic Core-Bracing Monitor Active.');
+        crepitusAnalyzer.init(valsalvaMonitor.microphoneStream, valsalvaMonitor.audioContext).then((crepActive) => {
+          if (crepActive) {
+            writeLog('🔊 [CREPITUS] High-Frequency Joint Acoustic Profiler Active (1800-5500 Hz).');
+          }
+        }).catch(() => {});
       } else {
         writeLog('🎙️ [VALSALVA] Optical Biomechanics Active (Microphone fallback).');
+        crepitusAnalyzer.init().catch(() => {});
       }
-    }).catch(() => {});
+    }).catch(() => {
+      crepitusAnalyzer.init().catch(() => {});
+    });
     sonificationSynth.start();
     rhythmGame.reset();
 
@@ -1786,6 +1812,8 @@ document.addEventListener('DOMContentLoaded', () => {
     cheatDetector.reset();
     ghostOnionSkin.reset();
     cnsMonitor.reset();
+    crepitusAnalyzer.stop();
+    inertiaEngine.reset();
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -1941,6 +1969,8 @@ document.addEventListener('DOMContentLoaded', () => {
         cheatedReps: Math.max(0, totalRepsCount - cleanRepCount),
         cnsTremorRatio: cnsMonitor.tremorRatio,
         cnsStatus: cnsMonitor.status,
+        momentOfInertia: inertiaEngine.momentOfInertia,
+        jointCrepitusDetected: crepitusAnalyzer.crepitusDetected,
         repDetails: completedReps.map((r, i) => ({
           repNum: r.repNum,
           peakAngle: Math.round(r.peakAngle),
@@ -1997,7 +2027,9 @@ document.addEventListener('DOMContentLoaded', () => {
       cleanReps: cleanRepCount,
       cheatedReps: Math.max(0, totalRepsCount - cleanRepCount),
       cnsTremorRatio: cnsMonitor.tremorRatio,
-      cnsStatus: cnsMonitor.status
+      cnsStatus: cnsMonitor.status,
+      momentOfInertia: inertiaEngine.momentOfInertia,
+      jointCrepitusDetected: crepitusAnalyzer.crepitusDetected
     });
   });
 });

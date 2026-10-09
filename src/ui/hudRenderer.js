@@ -229,12 +229,14 @@ export class HUDRenderer {
     ghostSkeleton = null,
     cheatData = null,
     cnsData = null,
-    shaderStatus = null
+    shaderStatus = null,
+    crepitusData = null,
+    inertiaData = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData || cnsData || shaderStatus) {
+      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData || cnsData || shaderStatus || inertiaData) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
@@ -254,6 +256,9 @@ export class HUDRenderer {
         }
         if (rpeData) {
           this.drawRpeBadge(this.ctx, rpeData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (inertiaData) {
+          this.drawInertiaGauge(this.ctx, inertiaData, this.logicalWidth, this.logicalHeight, performance.now());
         }
         if (dvrReplay) {
           this.drawDvrWindow(this.ctx, dvrReplay, this.logicalWidth, this.logicalHeight, performance.now());
@@ -534,6 +539,16 @@ export class HUDRenderer {
     // 45. WebGL Low-Light Contrast Normalization Shader Status (Top-Left Ambient Pill)
     if (shaderStatus) {
       this.drawShaderStatus(this.ctx, shaderStatus, width, height, now);
+    }
+
+    // 46. Rotational Moment of Inertia & Angular Momentum Gauge (Top-Right HUD)
+    if (inertiaData) {
+      this.drawInertiaGauge(this.ctx, inertiaData, width, height, now);
+    }
+
+    // 47. Joint Crepitus Acoustic Profiler & Mini Spectrogram Wave
+    if (crepitusData && landmarks && landmarks.length >= 27) {
+      this._renderCrepitusPill(this.ctx, crepitusData, landmarks, activeExercise, width, height, now);
     }
 
     this.ctx.restore();
@@ -5631,6 +5646,202 @@ export class HUDRenderer {
       x + 22,
       y + (badgeH / 2),
       'bold 6.3px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Rotational Moment of Inertia & Angular Momentum Gauge:
+   * Top-right gauge displaying: 'INERTIA (I): 12.4 kg·m² | TURNOVER SPEED: FAST'
+   *
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [inertiaData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawInertiaGauge(ctx = this.ctx, inertiaData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !inertiaData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const badgeW = 216;
+    const badgeH = 26;
+    // Mirrored display: x = 20 places it on visual TOP-RIGHT of screen
+    const x = 20;
+    // Stacked below RPE badge (which spans y=14..60)
+    const y = 66;
+
+    const inertia = typeof inertiaData.momentOfInertia === 'number' ? inertiaData.momentOfInertia : 12.0;
+    const speed = inertiaData.turnoverSpeed || 'STEADY';
+    const label = inertiaData.displayLabel || `INERTIA (I): ${inertia.toFixed(1)} kg·m² | TURNOVER SPEED: ${speed}`;
+
+    ctx.save();
+
+    let themeColor = '#00f2fe';
+    if (speed === 'FAST') {
+      themeColor = '#00f2fe'; // Explosive turnover
+    } else if (speed === 'MODERATE') {
+      themeColor = '#00ff87';
+    } else {
+      themeColor = '#38bdf8';
+    }
+
+    // 1. Glassmorphic Pill Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = 'rgba(0, 242, 254, 0.40)';
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Rotational Flywheel Icon (animated based on turnover speed)
+    const iconX = x + 14;
+    const iconY = y + (badgeH / 2);
+    const rotAngle = (now / (speed === 'FAST' ? 120 : (speed === 'MODERATE' ? 240 : 450))) % (Math.PI * 2);
+
+    ctx.save();
+    ctx.translate(iconX, iconY);
+    ctx.rotate(rotAngle);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 4.5, 0, Math.PI * 1.5);
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // Arrowhead on arc tip
+    ctx.beginPath();
+    ctx.arc(0, -4.5, 1.4, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.fill();
+
+    ctx.restore();
+
+    // 3. Unmirrored Readout Text
+    this._drawUnmirroredText(
+      label,
+      x + 26,
+      y + (badgeH / 2),
+      'bold 6.4px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Crepitus Audio Pill & Mini Spectrogram Wave:
+   * Displays adjacent to active moving knee/shoulder joints.
+   * Cyan if silent/smooth; pulsing amber wave when continuous acoustic friction is detected: '⚠️ JOINT FRICTION ELEVATED'.
+   *
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {Object} crepitusData
+   * @param {Array<Object>} landmarks
+   * @param {string} activeExercise
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderCrepitusPill(ctx, crepitusData, landmarks, activeExercise, width, height, now) {
+    if (!ctx || !crepitusData || !landmarks) return;
+
+    // Pick active joint node based on exercise
+    let targetJoint = null;
+    if (activeExercise === 'SQUAT') {
+      const kL = landmarks[25];
+      const kR = landmarks[26];
+      targetJoint = (kL && kR) ? ((kL.visibility || 0) >= (kR.visibility || 0) ? kL : kR) : (kL || kR);
+    } else if (activeExercise === 'PUSHUP') {
+      const sL = landmarks[11];
+      const sR = landmarks[12];
+      targetJoint = (sL && sR) ? ((sL.visibility || 0) >= (sR.visibility || 0) ? sL : sR) : (sL || sR);
+    } else {
+      const eL = landmarks[13];
+      const eR = landmarks[14];
+      targetJoint = (eL && eR) ? ((eL.visibility || 0) >= (eR.visibility || 0) ? eL : eR) : (eL || eR);
+    }
+
+    if (!targetJoint) return;
+
+    const jx = targetJoint.x * width;
+    const jy = targetJoint.y * height;
+
+    const pillW = 152;
+    const pillH = 24;
+    // Offset pill to the right or left of joint
+    const pillX = Math.min(width - pillW - 12, Math.max(12, jx + 18));
+    const pillY = Math.min(height - pillH - 12, Math.max(12, jy - 12));
+
+    const isFriction = Boolean(crepitusData.crepitusDetected);
+    const hasCavitation = Boolean(crepitusData.hasCavitation);
+    const wave = crepitusData.waveSamples || null;
+
+    ctx.save();
+
+    const themeColor = isFriction ? '#f59e0b' : (hasCavitation ? '#a855f7' : '#00f2fe');
+    const pulse = isFriction ? (0.65 + 0.35 * Math.sin(now / 90)) : 0.40;
+
+    // 1. Dashed Connector line linking joint node to pill
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(jx, jy);
+    ctx.lineTo(pillX + 6, pillY + (pillH / 2));
+    ctx.strokeStyle = isFriction ? 'rgba(245, 158, 11, 0.7)' : 'rgba(0, 242, 254, 0.35)';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 2. Glassmorphic Pill Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = isFriction ? `rgba(245, 158, 11, ${pulse.toFixed(2)})` : 'rgba(0, 242, 254, 0.45)';
+    ctx.lineWidth = isFriction ? 1.6 : 1.1;
+    ctx.shadowBlur = isFriction ? 10 : 4;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    // 3. Mini Spectrogram Wave (bars/waveform)
+    const waveStartX = pillX + 8;
+    const waveW = 28;
+    const waveH = 12;
+    const waveBaseY = pillY + (pillH / 2) + 6;
+
+    if (wave && wave.length > 0) {
+      const bars = Math.min(8, wave.length);
+      const barW = 2.2;
+      const barGap = 1.2;
+
+      for (let b = 0; b < bars; b++) {
+        const val = Math.max(0.15, wave[b * 2] || 0.2);
+        const bh = Math.max(2, val * waveH * (isFriction ? (1.0 + 0.3 * Math.sin(now / 70 + b)) : 0.8));
+        const bx = waveStartX + b * (barW + barGap);
+        const by = waveBaseY - bh;
+
+        ctx.fillStyle = isFriction ? `rgba(245, 158, 11, ${(0.6 + 0.4 * val).toFixed(2)})` : `rgba(0, 242, 254, ${(0.5 + 0.5 * val).toFixed(2)})`;
+        ctx.fillRect(bx, by, barW, bh);
+      }
+    }
+
+    // 4. Readout Text
+    const label = isFriction
+      ? '⚠️ JOINT FRICTION ELEVATED'
+      : (hasCavitation ? '✨ CAVITATION (POP)' : 'ACOUSTIC: SMOOTH');
+
+    this._drawUnmirroredText(
+      label,
+      pillX + 40,
+      pillY + (pillH / 2),
+      'bold 6.2px "Orbitron", -apple-system, sans-serif',
       themeColor,
       'left'
     );
