@@ -227,12 +227,14 @@ export class HUDRenderer {
     romRadarData = null,
     rpeData = null,
     ghostSkeleton = null,
-    cheatData = null
+    cheatData = null,
+    cnsData = null,
+    shaderStatus = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData) {
+      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData || cnsData || shaderStatus) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
@@ -243,6 +245,12 @@ export class HUDRenderer {
         }
         if (cheatData) {
           this.drawCheatGauge(this.ctx, cheatData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (cnsData) {
+          this.drawCnsTremorRadar(this.ctx, cnsData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (shaderStatus) {
+          this.drawShaderStatus(this.ctx, shaderStatus, this.logicalWidth, this.logicalHeight, performance.now());
         }
         if (rpeData) {
           this.drawRpeBadge(this.ctx, rpeData, this.logicalWidth, this.logicalHeight, performance.now());
@@ -516,6 +524,16 @@ export class HUDRenderer {
     // 43. Momentum Pelvic Sway & Strictness HUD Gauge (Top-Left Pill)
     if (cheatData) {
       this.drawCheatGauge(this.ctx, cheatData, width, height, now);
+    }
+
+    // 44. Central Nervous System (CNS) Tremor Radar & Neuromuscular Pulse (Top-Left Pill)
+    if (cnsData) {
+      this.drawCnsTremorRadar(this.ctx, cnsData, width, height, now);
+    }
+
+    // 45. WebGL Low-Light Contrast Normalization Shader Status (Top-Left Ambient Pill)
+    if (shaderStatus) {
+      this.drawShaderStatus(this.ctx, shaderStatus, width, height, now);
     }
 
     this.ctx.restore();
@@ -4564,7 +4582,7 @@ export class HUDRenderer {
     const cardH = 92;
     // Mirrored display: (w - cardW - 20) places it on visual TOP-LEFT of screen
     const x = w - cardW - 20;
-    const y = 104; // Stacked cleanly below top status badges
+    const y = 158; // Stacked cleanly below top status badges
 
     const pelvicYaw = typeof transverseData.pelvicYawDeg === 'number' ? transverseData.pelvicYawDeg : 0;
     const isAsymmetric = Boolean(transverseData.isAsymmetric);
@@ -5422,6 +5440,197 @@ export class HUDRenderer {
       x + 22,
       y + (badgeH / 2),
       'bold 6.8px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the CNS Tremor Radar / Neuromuscular Status Badge:
+   * Animated brain/pulse icon on top-left HUD.
+   * Green (STABLE) when tremor ratio < 2.0; pulsing Crimson (NEURAL BREAKDOWN) when > 3.5.
+   *
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object} [cnsData]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawCnsTremorRadar(ctx = this.ctx, cnsData, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !cnsData) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const badgeW = 196;
+    const badgeH = 24;
+    // Mirrored display: (w - badgeW - 20) places it on visual TOP-LEFT of screen
+    const x = w - badgeW - 20;
+    const y = 104;
+
+    const ratio = typeof cnsData.tremorRatio === 'number' ? cnsData.tremorRatio : 1.0;
+    const isFatigued = Boolean(cnsData.isFatigued) || ratio > 3.5;
+    const isElevated = !isFatigued && ratio >= 2.0;
+
+    ctx.save();
+
+    let themeColor = '#00ff87'; // Green (STABLE)
+    let glowColor = '#00ff87';
+    let statusText = `CNS: ${ratio.toFixed(1)}x [STABLE]`;
+
+    if (isFatigued) {
+      themeColor = '#ff0055'; // Pulsing Crimson (NEURAL BREAKDOWN)
+      glowColor = '#ff0055';
+      statusText = `CNS: ${ratio.toFixed(1)}x [NEURAL BREAKDOWN]`;
+    } else if (isElevated) {
+      themeColor = '#f59e0b'; // Amber (ELEVATED)
+      glowColor = '#f59e0b';
+      statusText = `CNS: ${ratio.toFixed(1)}x [ELEVATED]`;
+    }
+
+    const pulse = isFatigued ? (0.60 + 0.40 * Math.sin(now / 80)) : 0.35;
+
+    // 1. Glassmorphic Pill Container
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.90)';
+    ctx.strokeStyle = isFatigued
+      ? `rgba(255, 0, 85, ${pulse.toFixed(2)})`
+      : (isElevated ? 'rgba(245, 158, 11, 0.50)' : 'rgba(0, 255, 135, 0.45)');
+    ctx.lineWidth = isFatigued ? 1.8 : 1.2;
+    ctx.shadowBlur = isFatigued ? 12 : 5;
+    ctx.shadowColor = glowColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Animated Brain / Neuromuscular Pulse Icon
+    const iconX = x + 12;
+    const iconY = y + (badgeH / 2);
+
+    ctx.save();
+    ctx.translate(iconX, iconY);
+
+    // Stylized brain lobes / arcs
+    ctx.beginPath();
+    ctx.arc(-2.5, -1, 2.8, Math.PI * 0.7, Math.PI * 1.8);
+    ctx.arc(2.5, -1, 2.8, Math.PI * 1.2, Math.PI * 0.3);
+    ctx.lineTo(0, 3.5);
+    ctx.closePath();
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 1.1;
+    ctx.shadowBlur = isFatigued ? 10 : 4;
+    ctx.shadowColor = glowColor;
+    ctx.stroke();
+
+    if (isFatigued) {
+      // Expanding alert shockwave ring
+      const ringRadius = 3.5 + 4.5 * ((now % 500) / 500);
+      const ringAlpha = 1.0 - ((now % 500) / 500);
+      ctx.beginPath();
+      ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255, 0, 85, ${ringAlpha.toFixed(2)})`;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 3. Mini Animated Pulse Waveform (micro EEG tracer)
+    const waveStartX = x + 23;
+    const waveW = 20;
+    const waveMidY = y + (badgeH / 2);
+    const waveAmp = isFatigued ? 4.0 : (isElevated ? 2.5 : 1.4);
+
+    ctx.beginPath();
+    ctx.moveTo(waveStartX, waveMidY);
+    for (let i = 0; i < 4; i++) {
+      const segX = waveStartX + (i + 1) * (waveW / 4);
+      const segY = waveMidY + (i % 2 === 0 ? -waveAmp : waveAmp) * Math.sin((now / 100) + i);
+      ctx.lineTo(segX, segY);
+    }
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // 4. Unmirrored Readout Text
+    this._drawUnmirroredText(
+      statusText,
+      x + 48,
+      y + (badgeH / 2),
+      'bold 6.6px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Shader Status Indicator:
+   * Ambient pill indicator: 'SHADOW ENHANCEMENT: ON-GPU'
+   *
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx]
+   * @param {Object|boolean} [shaderStatus]
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawShaderStatus(ctx = this.ctx, shaderStatus, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const badgeW = 196;
+    const badgeH = 20;
+    // Mirrored display: (w - badgeW - 20) places it on visual TOP-LEFT of screen
+    const x = w - badgeW - 20;
+    const y = 132;
+
+    const isGpu = typeof shaderStatus === 'object' && shaderStatus !== null
+      ? (shaderStatus.isGpuActive !== undefined ? shaderStatus.isGpuActive : true)
+      : Boolean(shaderStatus);
+
+    const label = (typeof shaderStatus === 'object' && shaderStatus?.label)
+      ? shaderStatus.label
+      : (isGpu ? 'SHADOW ENHANCEMENT: ON-GPU' : 'SHADOW ENHANCEMENT: BYPASS');
+
+    ctx.save();
+
+    const themeColor = isGpu ? '#00f2fe' : '#9ca3af';
+
+    // 1. Glassmorphic Ambient Pill
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.85)';
+    ctx.strokeStyle = isGpu ? 'rgba(0, 242, 254, 0.35)' : 'rgba(156, 163, 175, 0.25)';
+    ctx.lineWidth = 1.0;
+    ctx.shadowBlur = isGpu ? 5 : 0;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Micro GPU Core Icon
+    const iconX = x + 12;
+    const iconY = y + (badgeH / 2);
+
+    ctx.beginPath();
+    ctx.rect(iconX - 3.5, iconY - 3.5, 7, 7);
+    ctx.fillStyle = isGpu ? 'rgba(0, 242, 254, 0.25)' : 'rgba(156, 163, 175, 0.15)';
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 0.9;
+    ctx.fill();
+    ctx.stroke();
+
+    // Central core dot
+    ctx.beginPath();
+    ctx.arc(iconX, iconY, 1.2, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.fill();
+
+    // 3. Unmirrored Readout Text
+    this._drawUnmirroredText(
+      label,
+      x + 22,
+      y + (badgeH / 2),
+      'bold 6.3px "Orbitron", -apple-system, sans-serif',
       themeColor,
       'left'
     );

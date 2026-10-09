@@ -62,6 +62,8 @@ import { RomRadarEngine } from './core/romRadarEngine.js';
 import { RpePredictor } from './core/rpePredictor.js';
 import { CheatDetector } from './core/cheatDetector.js';
 import { GhostOnionSkin } from './ui/ghostOnionSkin.js';
+import { ContrastPass } from './shaders/contrastPass.js';
+import { CnsMonitor } from './core/cnsMonitor.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -173,6 +175,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const rpePredictor = new RpePredictor();
   const cheatDetector = new CheatDetector();
   const ghostOnionSkin = new GhostOnionSkin();
+  const contrastPass = new ContrastPass();
+  const cnsMonitor = new CnsMonitor();
   let cleanRepCount = 0;
   let currentRepTrajectory = [];
   let lastFaultReplayTriggerTime = 0;
@@ -646,6 +650,7 @@ document.addEventListener('DOMContentLoaded', () => {
     rpePredictor.reset();
     cheatDetector.reset();
     ghostOnionSkin.reset();
+    cnsMonitor.reset();
     cleanRepCount = 0;
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -752,6 +757,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let rpeResult = null;
     let cheatResult = null;
     let ghostFrame = null;
+    let cnsResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -820,6 +826,9 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (wristR && wristR.visibility > 0.35) {
         wristMidpoint = { x: wristR.x, y: wristR.y };
       }
+
+      // Central Nervous System (CNS) Neuromuscular Tremor FFT Analysis
+      cnsResult = cnsMonitor.update(wristMidpoint, nowMs);
 
       // Real-Time Barbell Collinear Alignment & Sub-Pixel Tilt Radar
       if (wristL && wristR) {
@@ -1596,7 +1605,9 @@ document.addEventListener('DOMContentLoaded', () => {
       romRadarData: hasPose ? romRadarResult : null,
       rpeData: rpeResult || rpePredictor.getLastResult(),
       ghostSkeleton: ghostFrame,
-      cheatData: cheatResult || cheatDetector.lastResult
+      cheatData: cheatResult || cheatDetector.lastResult,
+      cnsData: cnsResult || cnsMonitor.getNeurologicalStatus(),
+      shaderStatus: contrastPass.getStatus()
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1631,7 +1642,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (webcam.readyState >= webcam.HAVE_CURRENT_DATA && !webcam.paused && !webcam.ended) {
       try {
-        await poseEngine.sendFrame(webcam);
+        // WebGL Low-Light Normalization Shader Pre-Processing Pass
+        const inputFrame = contrastPass.process(webcam);
+        await poseEngine.sendFrame(inputFrame || webcam);
       } catch (error) {
         console.error('PoseEngine: Frame processing failed in animation loop:', error);
       }
@@ -1685,6 +1698,7 @@ document.addEventListener('DOMContentLoaded', () => {
     rpePredictor.reset();
     cheatDetector.reset();
     ghostOnionSkin.reset();
+    cnsMonitor.reset();
     cleanRepCount = 0;
     voiceCommander.start();
     lastMobilityAlertTime = 0;
@@ -1771,6 +1785,7 @@ document.addEventListener('DOMContentLoaded', () => {
     rpePredictor.reset();
     cheatDetector.reset();
     ghostOnionSkin.reset();
+    cnsMonitor.reset();
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -1924,6 +1939,8 @@ document.addEventListener('DOMContentLoaded', () => {
         peakDorsiAngle: Math.round(peakDorsiAngle),
         cleanReps: cleanRepCount,
         cheatedReps: Math.max(0, totalRepsCount - cleanRepCount),
+        cnsTremorRatio: cnsMonitor.tremorRatio,
+        cnsStatus: cnsMonitor.status,
         repDetails: completedReps.map((r, i) => ({
           repNum: r.repNum,
           peakAngle: Math.round(r.peakAngle),
@@ -1978,7 +1995,9 @@ document.addEventListener('DOMContentLoaded', () => {
       kineticChainRating: kineticChainSummary,
       peakDorsiAngle: Math.round(peakDorsiAngle),
       cleanReps: cleanRepCount,
-      cheatedReps: Math.max(0, totalRepsCount - cleanRepCount)
+      cheatedReps: Math.max(0, totalRepsCount - cleanRepCount),
+      cnsTremorRatio: cnsMonitor.tremorRatio,
+      cnsStatus: cnsMonitor.status
     });
   });
 });
