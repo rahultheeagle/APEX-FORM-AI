@@ -66,6 +66,8 @@ import { ContrastPass } from './shaders/contrastPass.js';
 import { CnsMonitor } from './core/cnsMonitor.js';
 import { CrepitusAnalyzer } from './audio/crepitusAnalyzer.js';
 import { InertiaEngine } from './core/inertiaEngine.js';
+import { ButterworthFilter } from './dsp/butterworthFilter.js';
+import { ArchCollapseAnalyzer } from './core/archCollapseAnalyzer.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const webcam = /** @type {HTMLVideoElement|null} */ (document.getElementById('webcam'));
@@ -181,6 +183,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const cnsMonitor = new CnsMonitor();
   const crepitusAnalyzer = new CrepitusAnalyzer();
   const inertiaEngine = new InertiaEngine();
+  const butterworthFilter = new ButterworthFilter();
+  const archCollapseAnalyzer = new ArchCollapseAnalyzer();
   let cleanRepCount = 0;
   let currentRepTrajectory = [];
   let lastFaultReplayTriggerTime = 0;
@@ -657,6 +661,8 @@ document.addEventListener('DOMContentLoaded', () => {
     cnsMonitor.reset();
     crepitusAnalyzer.reset();
     inertiaEngine.reset();
+    butterworthFilter.reset();
+    archCollapseAnalyzer.reset();
     cleanRepCount = 0;
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -723,7 +729,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const isolatedLandmarks = personTracker.filterFrame(candidates);
     const candidateLandmarks = isolatedLandmarks || rawLandmarks;
     const stabilizedLandmarks = imuStabilizer.correctLandmarks(candidateLandmarks);
-    const landmarks = stabilizedLandmarks || candidateLandmarks;
+    const preFilteredLandmarks = stabilizedLandmarks || candidateLandmarks;
+    const smoothedLandmarks = butterworthFilter.filterLandmarks(
+      preFilteredLandmarks,
+      kineticTelemetry?.instantVelocity || 0
+    );
+    const landmarks = smoothedLandmarks || preFilteredLandmarks;
     const worldLandmarks = results.poseWorldLandmarks || landmarks;
     const hasPose = !!(landmarks && landmarks.length > 0);
     const newState = hasPose ? 'detected' : 'searching';
@@ -766,6 +777,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let cnsResult = null;
     let crepitusResult = null;
     let inertiaResult = null;
+    let archResult = null;
 
     let fsm = {
       currentState: isTrackingPaused ? 'PAUSED' : 'IDLE',
@@ -843,6 +855,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Segmental Moment of Inertia & Rotational Angular Momentum (L = I * omega)
       inertiaResult = inertiaEngine.computeRotationalInertia(landmarks, 75, nowMs);
+
+      // Real-Time Dynamic Foot Arch Collapse & Medial Pronation Analyzer
+      archResult = archCollapseAnalyzer.analyzeLandmarks(activeLandmarks, isTrackingActive && !isTrackingPaused);
 
       // Real-Time Barbell Collinear Alignment & Sub-Pixel Tilt Radar
       if (wristL && wristR) {
@@ -932,7 +947,9 @@ document.addEventListener('DOMContentLoaded', () => {
           rppgData: (webcam && webcam.readyState >= webcam.HAVE_CURRENT_DATA) ? rppgEngine.sampleFaceRegion(webcam, landmarks) : null,
           virtualGimbal: null,
           safetySpotterData: null,
-          spineData: null
+          spineData: null,
+          archData: archResult,
+          dspStatus: butterworthFilter.isActive ? 'DSP: ZERO-PHASE ADAPTIVE FILTER ACTIVE' : null
         });
         return;
       }
@@ -1623,7 +1640,9 @@ document.addEventListener('DOMContentLoaded', () => {
       cnsData: cnsResult || cnsMonitor.getNeurologicalStatus(),
       shaderStatus: contrastPass.getStatus(),
       crepitusData: crepitusResult,
-      inertiaData: inertiaResult || inertiaEngine.getLastResult()
+      inertiaData: inertiaResult || inertiaEngine.getLastResult(),
+      archData: hasPose ? archResult : null,
+      dspStatus: butterworthFilter.isActive ? 'DSP: ZERO-PHASE ADAPTIVE FILTER ACTIVE' : null
     });
 
     // Sub-Pixel Barbell Vector Radar, Dynamic Kinetic HUD & Telemetry State Pipeline
@@ -1717,6 +1736,8 @@ document.addEventListener('DOMContentLoaded', () => {
     cnsMonitor.reset();
     crepitusAnalyzer.reset();
     inertiaEngine.reset();
+    butterworthFilter.reset();
+    archCollapseAnalyzer.reset();
     cleanRepCount = 0;
     voiceCommander.start();
     lastMobilityAlertTime = 0;
@@ -1814,6 +1835,8 @@ document.addEventListener('DOMContentLoaded', () => {
     cnsMonitor.reset();
     crepitusAnalyzer.stop();
     inertiaEngine.reset();
+    butterworthFilter.reset();
+    archCollapseAnalyzer.reset();
     voiceCommander.stop();
     lastCriticalStallTime = 0;
     lastSpineAlertTime = 0;
@@ -1971,6 +1994,8 @@ document.addEventListener('DOMContentLoaded', () => {
         cnsStatus: cnsMonitor.status,
         momentOfInertia: inertiaEngine.momentOfInertia,
         jointCrepitusDetected: crepitusAnalyzer.crepitusDetected,
+        archIntegrity: archCollapseAnalyzer.archIntegrityPct,
+        isArchCollapsed: archCollapseAnalyzer.isCollapsed,
         repDetails: completedReps.map((r, i) => ({
           repNum: r.repNum,
           peakAngle: Math.round(r.peakAngle),
@@ -2029,7 +2054,9 @@ document.addEventListener('DOMContentLoaded', () => {
       cnsTremorRatio: cnsMonitor.tremorRatio,
       cnsStatus: cnsMonitor.status,
       momentOfInertia: inertiaEngine.momentOfInertia,
-      jointCrepitusDetected: crepitusAnalyzer.crepitusDetected
+      jointCrepitusDetected: crepitusAnalyzer.crepitusDetected,
+      archIntegrity: archCollapseAnalyzer.archIntegrityPct,
+      isArchCollapsed: archCollapseAnalyzer.isCollapsed
     });
   });
 });

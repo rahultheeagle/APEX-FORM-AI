@@ -231,12 +231,14 @@ export class HUDRenderer {
     cnsData = null,
     shaderStatus = null,
     crepitusData = null,
-    inertiaData = null
+    inertiaData = null,
+    archData = null,
+    dspStatus = null
   }) {
     this.clear();
 
     if (!landmarks || landmarks.length === 0) {
-      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData || cnsData || shaderStatus || inertiaData) {
+      if (voiceStatus || dvrReplay || imuStatus || sscData || efficiencyData || romRadarData || rpeData || cheatData || cnsData || shaderStatus || inertiaData || dspStatus) {
         this.ctx.save();
         this.ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
         if (voiceStatus) {
@@ -271,6 +273,9 @@ export class HUDRenderer {
         }
         if (romRadarData) {
           this.drawPolarMobilityRadar(this.ctx, romRadarData, this.logicalWidth, this.logicalHeight, performance.now());
+        }
+        if (dspStatus) {
+          this.drawDspBadge(this.ctx, dspStatus, this.logicalWidth, this.logicalHeight, performance.now());
         }
         this.ctx.restore();
       }
@@ -371,6 +376,11 @@ export class HUDRenderer {
     // 33. Kinetic Chain Golden Skeletal Particle Stream (Triple Extension)
     if (kineticChainData) {
       this._renderKineticParticleStream(kineticChainData, landmarks, width, height, now);
+    }
+
+    // 48. Foot Arch Strain Reticle (Plantar Contact Brackets & Medial Pronation)
+    if (archData && landmarks && landmarks.length >= 33) {
+      this._renderFootArchReticle(archData, landmarks, width, height, now);
     }
 
     // Reset Virtual Gimbal transformation back to screen-space for HUD chrome
@@ -549,6 +559,11 @@ export class HUDRenderer {
     // 47. Joint Crepitus Acoustic Profiler & Mini Spectrogram Wave
     if (crepitusData && landmarks && landmarks.length >= 27) {
       this._renderCrepitusPill(this.ctx, crepitusData, landmarks, activeExercise, width, height, now);
+    }
+
+    // 49. Zero-Phase Adaptive Butterworth DSP Telemetry Badge (Bottom-Right Pill)
+    if (dspStatus) {
+      this.drawDspBadge(this.ctx, dspStatus, width, height, now);
     }
 
     this.ctx.restore();
@@ -5842,6 +5857,243 @@ export class HUDRenderer {
       pillX + 40,
       pillY + (pillH / 2),
       'bold 6.2px "Orbitron", -apple-system, sans-serif',
+      themeColor,
+      'left'
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the Foot Arch Strain Reticle:
+   * Glowing contact brackets under both feet (Cyan if stable, flashing Hazard Amber boundary
+   * with '⚠️ PRONATION DETECTED // DRIVE THROUGH ARCH' if collapsed).
+   * 
+   * @param {Object} archData
+   * @param {Array<Object>} landmarks
+   * @param {number} width
+   * @param {number} height
+   * @param {number} now
+   * @private
+   */
+  _renderFootArchReticle(archData, landmarks, width, height, now) {
+    if (!archData || !landmarks || landmarks.length < 33) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const feet = [
+      {
+        name: 'LEFT',
+        ankleIdx: 27,
+        heelIdx: 29,
+        toeIdx: 31,
+        eval: archData.leftArch
+      },
+      {
+        name: 'RIGHT',
+        ankleIdx: 28,
+        heelIdx: 30,
+        toeIdx: 32,
+        eval: archData.rightArch
+      }
+    ];
+
+    let hasCollapsedFoot = false;
+    let collapsedMidX = 0;
+    let collapsedMidY = 0;
+
+    for (let i = 0; i < feet.length; i++) {
+      const f = feet[i];
+      const lmAnkle = landmarks[f.ankleIdx];
+      const lmHeel = landmarks[f.heelIdx];
+      const lmToe = landmarks[f.toeIdx];
+
+      if (!lmAnkle || !lmHeel || !lmToe) continue;
+      if ((lmAnkle.visibility || 1) < 0.35 || (lmHeel.visibility || 1) < 0.35 || (lmToe.visibility || 1) < 0.35) {
+        continue;
+      }
+
+      const ax = lmAnkle.x * width;
+      const ay = lmAnkle.y * height;
+      const hx = lmHeel.x * width;
+      const hy = lmHeel.y * height;
+      const tx = lmToe.x * width;
+      const ty = lmToe.y * height;
+
+      const isFootCollapsed = f.eval ? Boolean(f.eval.isCollapsed) : Boolean(archData.isCollapsed);
+      if (isFootCollapsed) {
+        hasCollapsedFoot = true;
+        collapsedMidX = (hx + tx) * 0.5;
+        collapsedMidY = Math.max(hy, ty) + 18;
+      }
+
+      const pulse = isFootCollapsed ? (0.60 + 0.40 * Math.sin(now / 90)) : 0.40;
+      const themeColor = isFootCollapsed ? '#f59e0b' : '#00f2fe';
+      const themeAlpha = isFootCollapsed ? `rgba(245, 158, 11, ${pulse.toFixed(2)})` : 'rgba(0, 242, 254, 0.75)';
+
+      // 1. Plantar Vector & Normal
+      const dx = tx - hx;
+      const dy = ty - hy;
+      const footLen = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / footLen) * 9;
+      const ny = (dx / footLen) * 9;
+
+      // 2. Glowing Plantar Contact Bracket (Under Foot Ground Line)
+      ctx.lineWidth = isFootCollapsed ? 2.8 : 1.8;
+      ctx.strokeStyle = themeAlpha;
+      ctx.shadowBlur = isFootCollapsed ? 14 : 6;
+      ctx.shadowColor = themeColor;
+
+      // Heel-to-Toe Plantar line
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+
+      // Bracket Caliper Ends
+      ctx.beginPath();
+      // Heel bracket tick
+      ctx.moveTo(hx - nx * 0.4, hy - ny * 0.4);
+      ctx.lineTo(hx + nx * 0.8, hy + ny * 0.8);
+      // Toe bracket tick
+      ctx.moveTo(tx - nx * 0.4, ty - ny * 0.4);
+      ctx.lineTo(tx + nx * 0.8, ty + ny * 0.8);
+      ctx.stroke();
+
+      // 3. Medial Arch Bridge (Tripod contact: Heel -> Ankle -> Toe)
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(ax, ay);
+      ctx.lineTo(tx, ty);
+      ctx.strokeStyle = isFootCollapsed ? `rgba(245, 158, 11, ${(0.45 * pulse).toFixed(2)})` : 'rgba(0, 242, 254, 0.40)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      // 4. Ankle Joint Node Indicator
+      ctx.beginPath();
+      ctx.arc(ax, ay, isFootCollapsed ? 4.5 : 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = themeColor;
+      ctx.fill();
+
+      // 5. Flashing Hazard Amber boundary box if collapsed
+      if (isFootCollapsed) {
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = `rgba(245, 158, 11, ${pulse.toFixed(2)})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(hx - 10, hy - 6);
+        ctx.lineTo(ax, ay - 12);
+        ctx.lineTo(tx + 10, ty - 6);
+        ctx.lineTo(tx + 8, ty + 12);
+        ctx.lineTo(hx - 8, hy + 12);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // 6. Directive Cue Banner if Pronation is detected
+    if (hasCollapsedFoot || archData.isCollapsed) {
+      const bannerText = '⚠️ PRONATION DETECTED // DRIVE THROUGH ARCH';
+      const textX = collapsedMidX || (width / 2);
+      const textY = Math.min(height - 45, Math.max(70, collapsedMidY || (height * 0.88)));
+
+      const bannerW = 280;
+      const bannerH = 22;
+      const bx = textX - (bannerW / 2);
+      const by = textY - (bannerH / 2);
+
+      const pulse = 0.65 + 0.35 * Math.sin(now / 90);
+
+      ctx.fillStyle = 'rgba(25, 16, 4, 0.92)';
+      ctx.strokeStyle = `rgba(245, 158, 11, ${pulse.toFixed(2)})`;
+      ctx.lineWidth = 1.6;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = '#f59e0b';
+
+      this._drawRoundedRect(ctx, bx, by, bannerW, bannerH, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      this._drawUnmirroredText(
+        bannerText,
+        textX,
+        textY,
+        'bold 7.5px "Orbitron", -apple-system, sans-serif',
+        '#f59e0b',
+        'center'
+      );
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders the bottom-right Signal Processing telemetry badge:
+   * 'DSP: ZERO-PHASE ADAPTIVE FILTER ACTIVE'
+   * 
+   * @param {CanvasRenderingContext2D} [ctx=this.ctx] Target drawing context.
+   * @param {string|boolean} [dspStatus=true] DSP status or string.
+   * @param {number} [canvasWidth=this.logicalWidth]
+   * @param {number} [canvasHeight=this.logicalHeight]
+   * @param {number} [now=performance.now()]
+   */
+  drawDspBadge(ctx = this.ctx, dspStatus = true, canvasWidth = this.logicalWidth, canvasHeight = this.logicalHeight, now = performance.now()) {
+    if (!ctx || !dspStatus) return;
+
+    const w = canvasWidth || this.logicalWidth || 640;
+    const h = canvasHeight || this.logicalHeight || 480;
+
+    const statusText = typeof dspStatus === 'string'
+      ? dspStatus
+      : 'DSP: ZERO-PHASE ADAPTIVE FILTER ACTIVE';
+
+    const badgeW = 206;
+    const badgeH = 20;
+    // Mirrored display: x = 20 places it on visual LOWER-RIGHT of screen
+    const x = 20;
+    const y = h - 24; // Bottom-right corner
+
+    ctx.save();
+
+    const themeColor = '#00f2fe';
+    const pulse = 0.70 + 0.30 * Math.sin(now / 140);
+
+    // 1. Badge Pill Background
+    ctx.fillStyle = 'rgba(7, 13, 26, 0.88)';
+    ctx.strokeStyle = `rgba(0, 242, 254, ${pulse.toFixed(2)})`;
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = themeColor;
+
+    this._drawRoundedRect(ctx, x, y, badgeW, badgeH, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // 2. Filter Wave / Signal Icon Node
+    const nodeX = x + 12;
+    const nodeY = y + (badgeH / 2);
+
+    ctx.beginPath();
+    ctx.arc(nodeX, nodeY, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = themeColor;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = themeColor;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(nodeX, nodeY, 3.2 + 3.0 * (1 - pulse), 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(0, 242, 254, ${(0.7 * pulse).toFixed(2)})`;
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // 3. Status text
+    this._drawUnmirroredText(
+      statusText,
+      x + 22,
+      y + (badgeH / 2),
+      'bold 6.8px "Orbitron", -apple-system, sans-serif',
       themeColor,
       'left'
     );
